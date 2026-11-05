@@ -1,0 +1,167 @@
+"""Project Tracker (local FastAPI on :8791).
+
+Everything the agent adds or changes goes through the tracker's agent API (`/api/agent/*`): tasks and
+projects it creates are attributed to it, context it attaches is a separate signed note, and a schedule it
+sets is pinned against the tracker's own re-planner. The agent names itself with `X-Agent-Name` and sends
+the optional bearer token (`AGENT_API_TOKEN`, Settings -> Assistant agent in the tracker). A few plain
+read/write calls that the agent API does not cover (feed, checklist, completing a task) use the app's
+ordinary API, which has no auth and is only reachable on localhost or through the bridge."""
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+from .. import config
+from .http import ServiceRouter, get_json, send_json
+
+SCHEDULE_KINDS = ("task", "routine", "exercise", "journal", "break", "meeting", "checklist")
+
+
+class ProjectTracker:
+    def __init__(self, router: ServiceRouter, settings: config.Settings | None = None):
+        self.router = router
+        s = settings or config.load()
+        self.headers = {"X-Agent-Name": s.agent_name}
+        tok = config.secret(s.sources.tracker_agent_token_env)
+        if tok:
+            self.headers["Authorization"] = f"Bearer {tok}"
+
+    def _c(self) -> httpx.Client:
+        c = self.router.client("tracker")
+        c.headers.update(self.headers)
+        return c
+
+    # ---------------------------------------------------------------- read
+    def ping(self) -> dict[str, Any]:
+        with self._c() as c:
+            return get_json(c, "/api/agent")
+
+    def tree(self) -> dict[str, Any]:
+        """{projects: [{id, parent_id, name, path, notes, source, open_tasks, notes_added}], tree: nested}"""
+        with self._c() as c:
+            return get_json(c, "/api/agent/tree")
+
+    def outline(self, max_tasks_per_project: int = 40) -> str:
+        """The open outline as indented text, which models read far better than nested JSON."""
+        lines: list[str] = []
+
+        def task_line(t: dict[str, Any], depth: int) -> None:
+            bits = [f"[{t['id']}]", t.get("title", "")]
+            if t.get("deadline"):
+                bits.append(f"due {t['deadline']}")
+            if t.get("importance"):
+                bits.append(f"p{t['importance']}")
+            if t.get("blocking"):
+                bits.append("BLOCKING" + (f" {t['blocking_for']}" if t.get("blocking_for") else ""))
+            if t.get("estimate_minutes"):
+                bits.append(f"~{t['estimate_minutes']}m")
+            if t.get("source") == "agent":
+                bits.append("(added by agent)")
+            lines.append("  " * depth + "- " + " ".join(str(b) for b in bits))
+            for n in t.get("notes_added") or []:
+                lines.append("  " * (depth + 1) + f"note [{n.get('author')}]: {n.get('body')}")
+            for ch in t.get("children") or []:
+                task_line(ch, depth + 1)
+
+        def walk(nodes: list[dict[str, Any]], depth: int) -> None:
+            for p in nodes:
+                lines.append("  " * depth + f"* {p['name']} (project {p['id']})")
+                for n in p.get("notes_added") or []:
+                    lines.append("  " * (depth + 1) + f"note [{n.get('author')}]: {n.get('body')}")
+                tasks = p.get("tasks") or []
+                for t in tasks[:max_tasks_per_project]:
+                    task_line(t, depth + 1)
+                if len(tasks) > max_tasks_per_project:
+                    lines.append("  " * (depth + 1) + f"- … {len(tasks) - max_tasks_per_project} more tasks")
+                walk(p.get("children") or [], depth + 1)
+
+        walk(self.tree().get("tree", []), 0)
+        return "\n".join(lines) or "(no projects)"
+
+    def find_tasks(self, q: str = "", project_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        with self._c() as c:
+            return get_json(c, "/api/agent/tasks", q=q or None, project_id=project_id, limit=limit)
+
+    def task(self, tid: int) -> dict[str, Any]:
+        with self._c() as c:
+            return get_json(c, f"/api/agent/tasks/{tid}")
+
+    def schedule_context(self, date: str | None = None) -> dict[str, Any]:
+        """The day as the tracker sees it: current plan with statuses, free windows between meetings, prioritised
+        candidate tasks with calibrated estimates, routines, exercise, rules document, standing instructions."""
+        with self._c() as c:
+            return get_json(c, "/api/agent/schedule", date=date)
+
+    def feed(self) -> dict[str, Any]:
+        with self._c() as c:
+            return get_json(c, "/api/feed")
+
+    def calendar(self, date: str | None = None) -> list[dict[str, Any]]:
+        with self._c() as c:
+            return get_json(c, "/api/calendar", date=date)
+
+    def checklist(self) -> dict[str, Any]:
+        with self._c() as c:
+            return get_json(c, "/api/checklist")
+
+    def notes(self, task_id: int | None = None, project_id: int | None = None) -> list[dict[str, Any]]:
+        with self._c() as c:
+            return get_json(c, "/api/agent/notes", task_id=task_id, project_id=project_id)
+
+    # ---------------------------------------------------------------- write (agent API)
+    def create_task(self, title: str, **fields: Any) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/agent/tasks", {"title": title, **{k: v for k, v in fields.items() if v is not None}})
+
+    def create_project(self, name: str, parent_id: int | None = None, parent_path: list[str] | None = None, notes: str = "") -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/agent/projects", {"name": name, "parent_id": parent_id, "parent_path": parent_path, "notes": notes})
+
+    def quick_add(self, text: str) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/agent/quick_add", {"text": text})
+
+    def add_note(self, body: str, task_id: int | None = None, project_id: int | None = None) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/agent/notes", {"body": body, "task_id": task_id, "project_id": project_id})
+
+    def delete_note(self, nid: int) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "DELETE", f"/api/agent/notes/{nid}")
+
+    def set_schedule(self, items: list[dict[str, Any]], date: str | None = None, work_start: str | None = None,
+                     work_end: str | None = None, rationale: str = "", pin: bool = True) -> dict[str, Any]:
+        """Returns {ok, dropped: [blocks that did not fit], plan}."""
+        body = {"items": items, "date": date, "work_start": work_start, "work_end": work_end, "rationale": rationale, "pin": pin}
+        with self._c() as c:
+            return send_json(c, "PUT", "/api/agent/schedule", body)
+
+    def set_day_instructions(self, text: str, date: str | None = None, rebuild: bool = True) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "PUT", "/api/agent/schedule/instructions", {"text": text, "date": date, "rebuild": rebuild})
+
+    def clear_day_instructions(self, date: str | None = None) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "DELETE", "/api/agent/schedule/instructions", None, date=date)
+
+    def rebuild_plan(self, from_now: bool = True, until: str | None = None, date: str | None = None) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/agent/schedule/rebuild", {"from_now": from_now, "until": until, "date": date})
+
+    def unpin_plan(self, date: str | None = None) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/agent/schedule/unpin", None, date=date)
+
+    # ---------------------------------------------------------------- write (plain API; not covered by the agent API)
+    def update_task(self, tid: int, **fields: Any) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "PATCH", f"/api/tasks/{tid}", {k: v for k, v in fields.items() if v is not None})
+
+    def complete_task(self, tid: int, undo: bool = False) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", f"/api/tasks/{tid}/{'uncomplete' if undo else 'complete'}")
+
+    def checklist_done(self, item: str, undo: bool = False) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "POST", "/api/checklist/done", {"item": item, "undo": undo})

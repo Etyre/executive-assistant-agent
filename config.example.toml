@@ -1,0 +1,64 @@
+# Copy to config.toml. Secrets never go here: they come from the environment or data/.env (see .env.example).
+
+agent_name = "Atlas"            # the name you say to Siri: "Tell Atlas ..."
+user_name = "Eli"
+timezone = "America/Los_Angeles"
+reminder_poll_seconds = 30
+
+[llm]
+provider = "anthropic"          # anthropic | openai_compat (Ollama, vLLM, LM Studio, llama.cpp server)
+model = "claude-opus-5-5"
+effort = "high"                 # low | medium | high | xhigh | max
+max_tokens = 16000
+fallbacks = true                # Anthropic server-side refusal fallbacks (beta) - set false to disable
+history_messages = 80
+max_tool_rounds = 20
+# For a local open-weight model on the Mac mini:
+# provider = "openai_compat"
+# model = "qwen3:32b"             # whatever `ollama list` shows; needs tool-calling support
+# openai_base_url = "http://127.0.0.1:11434/v1"
+
+[sources]
+# Cloud deployment: reach the Mac through the bridge over Tailscale.
+bridge_url = ""                 # e.g. "http://100.101.102.103:8799"; empty = talk to localhost directly
+# Mac / Mac mini deployment: direct.
+tracker_url = "http://127.0.0.1:8791"
+focus_url   = "http://127.0.0.1:8790"
+bandit_url  = "http://127.0.0.1:8777"
+timeout_seconds = 20
+# Secrets for these live in .env: AGENT_API_TOKEN (tracker agent API, optional), CALENDAR_ICS_URLS (iCal feeds),
+# TOGGL_API_TOKEN, EXERCISE_EXPORT_URL.
+
+[channels]
+telegram_allowed_user_ids = []  # your numeric Telegram user id(s); message @userinfobot to find yours
+web_host = "0.0.0.0"
+web_port = 8800
+public_base_url = ""            # https URL where Twilio (and the iPhone Shortcut) reach this server
+twilio_from_number = ""         # your Twilio number, E.164
+twilio_allowed_callers = []     # your phone number(s), E.164; empty = anyone (don't)
+twilio_voice = "Google.en-US-Chirp3-HD-Aoede"
+stt_provider = "auto"           # auto | openai | deepgram | local | off
+
+# Scheduled checks: proactive turns. Nothing is sent unless the agent decides to (send_message).
+[[checks]]
+name = "morning"
+time = "08:30"
+prompt = """Morning check. Pull last night's sleep (sleep_summary 7), today's calendar and tracker plan, the open
+review items in the focus monitor, exercise days-since against the exercise plan, and any habit documents. If
+anything looks off track or the day's plan needs attention, send a brief note (a few lines). Otherwise call
+no_action_needed."""
+
+[[checks]]
+name = "midday"
+time = "13:30"
+days = ["mon", "tue", "wed", "thu", "fri"]
+prompt = """Midday check. Look at today's focus metrics so far (focus_day), toggl_current and the tracker feed. Compare with
+the habit documents. Message only if the morning is clearly off its usual pattern or a commitment is at risk."""
+
+[[checks]]
+name = "evening"
+time = "21:00"
+prompt = """Evening check. Review today's focus metrics and Toggl summary against the habit documents and recent days
+(focus_metrics 14). Note anything worth remembering in memory (metric baselines, what happened). Message the user
+only for something that needs a decision tonight (e.g. tonight's Sleep Bandit checklist not done, a deadline
+tomorrow with no block scheduled). Otherwise no_action_needed."""

@@ -1,0 +1,18 @@
+# Same file for the GCP VM and the Mac mini. State (memory, transcripts, SQLite) lives in ./data on the host.
+services:
+  ea:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: ea
+    restart: unless-stopped
+    env_file: ../data/.env
+    volumes:
+      - ../data:/data
+      - ../instructions:/app/instructions
+      - ../config.toml:/app/config.toml:ro
+    ports:
+      - "8800:8800"
+    # On a Mac mini where the data servers run on the host, let the container reach them:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,0 +1,80 @@
+"""Claude via the official Anthropic SDK.
+
+Defaults follow the current API: adaptive thinking (always on for Claude Opus 5.5), `output_config.effort`
+for depth, prompt caching on the stable system block, and server-side refusal fallbacks so a safety
+classifier declining a turn is routed to another Claude model rather than surfacing as an error.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import anthropic
+
+from .base import LLMError, LLMResponse, ToolSpec
+
+log = logging.getLogger(__name__)
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+class AnthropicProvider:
+    name = "anthropic"
+
+    def __init__(self, model: str = "claude-opus-5-5", effort: str = "high", fallbacks: bool = True,
+                 client: anthropic.Anthropic | None = None):
+        self.model = model
+        self.effort = effort
+        self.fallbacks = fallbacks
+        self.client = client or anthropic.Anthropic(max_retries=3)
+
+    @staticmethod
+    def _tools(tools: list[ToolSpec]) -> list[dict[str, Any]]:
+        return [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools]
+
+    @staticmethod
+    def _with_history_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Mark the last conversation message (not a trailing system message) as a cache breakpoint, so the
+        whole history up to it is read from cache next time. Works on copies; stored history is untouched."""
+        out = list(messages)
+        for i in range(len(out) - 1, -1, -1):
+            m = out[i]
+            if m.get("role") == "system":
+                continue
+            content = m.get("content")
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            if isinstance(content, list) and content and isinstance(content[-1], dict) \
+                    and content[-1].get("type") in ("text", "tool_result", "tool_use"):
+                content = list(content)
+                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+                out[i] = {**m, "content": content}
+            break
+        return out
+
+    def complete(self, *, system: list[dict[str, Any]], messages: list[dict[str, Any]],
+                 tools: list[ToolSpec], max_tokens: int) -> LLMResponse:
+        kwargs: dict[str, Any] = dict(
+            model=self.model, max_tokens=max_tokens, system=system, messages=self._with_history_breakpoint(messages),
+            thinking={"type": "adaptive"}, output_config={"effort": self.effort},
+        )
+        if tools:
+            kwargs["tools"] = self._tools(tools)
+        try:
+            if self.fallbacks:
+                resp = self.client.beta.messages.create(betas=[FALLBACK_BETA], extra_body={"fallbacks": "default"}, **kwargs)
+            else:
+                resp = self.client.messages.create(**kwargs)
+        except anthropic.RateLimitError as e:
+            raise LLMError(f"rate limited by Anthropic: {e.message}") from e
+        except anthropic.APIStatusError as e:
+            raise LLMError(f"Anthropic API error {e.status_code}: {e.message}") from e
+        except anthropic.APIConnectionError as e:
+            raise LLMError(f"could not reach Anthropic: {e}") from e
+        content = [b.model_dump(exclude_none=True) for b in resp.content]
+        stop = resp.stop_reason or "end_turn"
+        if stop == "refusal":
+            detail = getattr(resp, "stop_details", None)
+            why = getattr(detail, "explanation", None) if detail else None
+            content = [{"type": "text", "text": "I can't help with that particular request." + (f" ({why})" if why else "")}]
+        usage = resp.usage.model_dump(exclude_none=True) if resp.usage else {}
+        return LLMResponse(content=content, stop_reason=stop, usage=usage, model=getattr(resp, "model", self.model))
