@@ -7,3 +7,38 @@ config.toml
 .env
 *.log
 .DS_Store
+CLAUDE.local.md
+.ruff_cache/
+.mypy_cache/
+dist/
+out/
+build/
+node_modules/
+
+# secrets and personal config (the committed *.example twins are the templates)
+.env.*
+!.env.example
+*.p8
+*.pem
+*.key
+
+# state, exports and large data (the agent's state is data/, above)
+*.db
+*.sqlite
+*.sqlite3
+*.jsonl
+*.csv
+*.xlsx
+*.gguf
+*.safetensors
+*.pt
+*.mp3
+*.m4a
+*.wav
+*.mp4
+*.mov
+
+# Xcode (regenerate with: cd apps/Atlas && xcodegen generate)
+apps/Atlas/Atlas.xcodeproj/
+apps/Atlas/build/
+*.xcuserstate

@@ -11,6 +11,6 @@
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>__REPO__/data/ea.log</string>
-  <key>StandardErrorPath</key><string>__REPO__/data/ea.log</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/executive-assistant.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/executive-assistant.log</string>
 </dict></plist>

@@ -12,6 +12,6 @@
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/ea-bridge.log</string>
-  <key>StandardErrorPath</key><string>/tmp/ea-bridge.log</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/ea-bridge.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ea-bridge.log</string>
 </dict></plist>
