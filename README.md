@@ -277,6 +277,13 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - When the model contacts Eli mid-turn, the turn is cut short; the pending `tool_use` blocks are paired with a
   synthetic `tool_result` so the stored history (and a later API-engine turn) stays valid. The SDK's own session
   file may hold a dangling tool call; it resumes or is dropped as above.
+- The shared confirm step (`llm_contact.with_confirm`: one forced-choice question before a `contact_eli` call is
+  sent) is deliberately not wired in here (looked at 2026-11-10); every `contact_eli` call is sent as is. Agent
+  SDK engine: the harness owns the model calls and the tool loop, so there is no place to make a forced-choice
+  call on the same conversation or to hand back a "keep working" tool result. API engine: the model is
+  `claude-opus-5-5`, which per the API docs answers 400 both to a forced `tool_choice` and to disabled
+  thinking, so the decision call could only fail (and fall back to sending). Revisit if `llm.model` becomes one
+  that accepts both; the place is between `provider.complete()` and `contact.check()` in `agent/core.py`.
 - `.env` lines may carry `# comments` after the value; `config.py` strips them.
 - Mac app: the Keychain asked for the login password on every launch of an ad-hoc-signed build, so the token is
   a 0600 file in Application Support on macOS (Keychain on iOS). Ad-hoc signing also breaks notifications
