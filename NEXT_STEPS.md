@@ -22,9 +22,9 @@ and sent when it returns. Still to do: (a) Eli opens Atlas on the phone and scan
 (`atlas://setup?url=…&token=…`; regenerate with any QR tool from `EA_WEB_TOKEN` and `http://Elis-MacBook-Pro-2.local:8800`);
 (b) ~~agree to the PLA~~ done 21:20; `build-ios.sh` then created the push App ID and the build with
 `aps-environment` is installed on the phone (verified with codesign). APNs key created 21:25 (Sandbox & Production, team
-scoped), installed in `data/` and `data/.env`; `ea check` says `push: configured (com.elityre.atlas)`. Push to the
-phone is live as soon as the app registers a device (open it, scan the QR, allow notifications), then
-`python -m ea push-test`. Nightblock still needs `api.push.apple.com` / `api.sandbox.push.apple.com` allowed (step 3)
+scoped), installed in `data/` and `data/.env`; `ea check` says `push: configured (com.elityre.atlas)`. PUSH WORKS: at 21:45 the phone,
+on Tailscale from a coworking Wi-Fi, registered (sandbox, read from the embedded profile) and
+`python -m ea push-test` got `200 ok` from Apple. Nightblock still needs `api.push.apple.com` / `api.sandbox.push.apple.com` allowed (step 3)
 for overnight pushes; (c) Tailscale: the Mac is on it since 21:50 (App Store app,
 `elis-macbook-pro.tail5a9488.ts.net`, server reachable on it); the phone needs the Tailscale app signed in to the
 same account, then the setup QR with the tailnet URL (Eli was on a coworking Wi-Fi that isolates devices, so the

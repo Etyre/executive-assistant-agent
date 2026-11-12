@@ -28,11 +28,7 @@ final class AppConfig {
         }
         token = TokenStore.get() ?? ""
         deviceName = d.string(forKey: "deviceName") ?? AppConfig.defaultDeviceName
-        #if DEBUG
-        pushEnvironment = d.string(forKey: "pushEnv") ?? "sandbox"
-        #else
-        pushEnvironment = d.string(forKey: "pushEnv") ?? "production"
-        #endif
+        pushEnvironment = d.string(forKey: "pushEnv") ?? AppConfig.detectedPushEnvironment
         deviceToken = d.string(forKey: "deviceToken") ?? ""
         registeredToken = d.string(forKey: "registeredToken") ?? ""
         if let id = d.string(forKey: "clientID") {
@@ -65,6 +61,21 @@ final class AppConfig {
         while s.hasSuffix("/") { s.removeLast() }
         guard !s.isEmpty, let u = URL(string: s), u.scheme != nil, u.host != nil else { return nil }
         return u
+    }
+
+    /// Which APNs gateway this build's tokens belong to, read from the provisioning profile Apple embedded in the
+    /// bundle: `aps-environment = development` there means sandbox tokens, which is every build installed by Xcode
+    /// or devicectl, Release included (the server got 400 BadDeviceToken from production on 2026-11-11). No profile
+    /// (App Store) or a production one means production.
+    static var detectedPushEnvironment: String {
+        #if os(macOS)
+        let url = Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
+        #else
+        let url = Bundle.main.bundleURL.appendingPathComponent("embedded.mobileprovision")
+        #endif
+        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .isoLatin1),
+              let r = text.range(of: "<key>aps-environment</key>") else { return "production" }
+        return text[r.upperBound...].prefix(80).contains("development") ? "sandbox" : "production"
     }
 
     static var platform: String {

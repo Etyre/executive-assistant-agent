@@ -55,7 +55,8 @@ delivery when the app is closed, and is required for the iPhone.
    with the Camera app (generate it with any QR tool; never commit the image). The app fills both fields and
    connects. The Mac app understands the same link.
    The status line should read `registered (sandbox)`. *Send test notification* proves the whole path.
-   - A debug build from Xcode uses the APNs **sandbox**; the app says so when it registers, and the server routes
+   - Any build installed by Xcode or `build-ios.sh` (Release included) carries a development provisioning profile
+     and so gets APNs **sandbox** tokens; the app reads `aps-environment` from its embedded profile and registers
      accordingly. A TestFlight/App Store build registers as **production**. The picker in Settings overrides it.
    - Away from home the server URL has to be the public one (`channels.public_base_url`, e.g. Tailscale Funnel).
      On the home network `http://<your-mac>.local:8800` works (local networking is allowed in the Info.plist).
@@ -162,6 +163,10 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
 - The phone never reached the Mac after the first install (no request in the server log at all): the Info.plist
   lacked `NSLocalNetworkUsageDescription`. On iOS 14+ a `.local` name or a private IP is "local network" use and is
   refused silently without that key; with it the user gets a one-time prompt. Added 2026-11-11 (`project.yml`).
+- Apple answered `400 BadDeviceToken` to the first real push (2026-11-11): the app had guessed "production" because
+  it was a Release build, but a devicectl-installed build has a development profile and therefore sandbox tokens.
+  The environment now comes from the embedded provisioning profile, not from the build configuration. The server
+  forgets a device on BadDeviceToken, so the app must relaunch to register again.
 - App Transport Security treats a Tailscale address (100.x or `*.ts.net`) as a remote host, so plain http to it is
   refused unless `NSExceptionDomains` lists `ts.net` with `NSExceptionAllowsInsecureHTTPLoads`; "local networking"
   only covers `.local` names and private ranges.
