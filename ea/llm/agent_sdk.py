@@ -73,6 +73,7 @@ class AgentSDKRunner:
         self._thread: str = ""
         self._channel: str = ""
         self._server = None
+        self._context = "main"
         self.last_rate_limit: dict[str, Any] | None = None
         self.notify: Callable[[str], None] | None = None     # set by Agent: a message to the user (push + apps)
 
@@ -168,10 +169,20 @@ class AgentSDKRunner:
 
         @tool(name, spec.description, schema)
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
-            out, err = await asyncio.to_thread(self.tools.dispatch, name, args or {})
+            out, err = await asyncio.to_thread(self._dispatch, name, args or {})
             log.info("tool %s(%s) -> %s%s", name, _short(args), "ERROR " if err else "", _short(out, 160))
             return {"content": [{"type": "text", "text": out}], **({"is_error": True} if err else {})}
         return handler
+
+    def _dispatch(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
+        """Runs on a pool thread: tag it with this turn's context for the time of the call, so tools that keep
+        per-context state (the browser) know whose call it is; untagged, it would count as the main agent's."""
+        t = threading.current_thread()
+        t.ea_context = self._context                 # type: ignore[attr-defined]
+        try:
+            return self.tools.dispatch(name, args)
+        finally:
+            del t.ea_context
 
     def server(self):
         if self._server is None:
@@ -182,12 +193,13 @@ class AgentSDKRunner:
     # ------------------------------------------------------------------ one turn
     def run_turn(self, user_text: str, system_text: str, thread: str, channel: str, mode: str,
                  on_event: Callable[[dict[str, Any]], None] | None = None, images: list[dict[str, Any]] | None = None,
-                 drain: Callable[[], list[dict[str, Any]]] | None = None) -> str:
+                 drain: Callable[[], list[dict[str, Any]]] | None = None, context: str = "main") -> str:
         """Called from Agent.handle (a worker thread): run the turn to completion on a private event loop.
+        `context`: whose turn this is for per-context tool state ("main", or a worker's thread name).
         `drain`, when given, is polled while the turn runs and returns messages the user sent meanwhile
         ({"text", "images" (stored blocks), "inflated" (blocks for the model)}); each is handed to the running
         turn right away instead of waiting for it to end."""
-        self._thread, self._channel = thread, channel
+        self._thread, self._channel, self._context = thread, channel, context
         result: dict[str, Any] = {}
 
         def runner() -> None:

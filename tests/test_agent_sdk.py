@@ -1,5 +1,6 @@
 """The Claude Agent SDK as the engine (`llm.provider = "agent_sdk"`), with a scripted fake `query`."""
 import asyncio
+import threading
 import json
 
 import claude_agent_sdk as sdk
@@ -200,3 +201,19 @@ def test_message_sent_mid_turn_reaches_the_running_turn(monkeypatch):
     assert [m["text"] for m in a.convo.readable(10) if m["who"] == "me"][-2:] == ["anything pending?", "also check the calendar"]
     assert [m["text"] for m in said if m["who"] == "me"] == ["anything pending?", "also check the calendar"]
     assert a._inbox == []                                               # nothing left for a "late" next turn
+
+
+def test_tool_dispatch_threads_carry_the_turns_context(monkeypatch):
+    """Tools run on pool threads under the SDK; each call is tagged with whose turn it is (main or a worker), which
+    the browser uses to keep one Chromium per context."""
+    from ea.connectors.browser import current_context
+    a, s = _agent(monkeypatch)
+    seen = []
+    a.tools.tool("ctx_probe", "test", {"type": "object", "properties": {}})(lambda: seen.append((threading.current_thread().name, current_context())) or "ok")
+    wrapped = a.sdk._wrap(next(sp for sp in a.tools.specs() if sp.name == "ctx_probe"))
+    a.sdk._context = "worker:7"
+    asyncio.run(wrapped.handler({}))
+    a.sdk._context = "main"
+    asyncio.run(wrapped.handler({}))
+    assert [c for _, c in seen] == ["worker:7", "main"]
+    assert current_context() == "main"                      # the tag never leaks past the call

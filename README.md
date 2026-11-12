@@ -102,7 +102,10 @@ running ones and the app shows them under the chat.
 The agent has a headless Chromium (Playwright): `web_search`, `web_open` (a page as text, paged), `web_more`,
 `web_links`, `web_click`, `web_fill`. JavaScript runs; nothing persists between runs; it is told never to enter
 passwords or pay. `python -m playwright install chromium` once after installing; `sources.web_browsing = false`
-disables it.
+disables it. The main agent and each background worker get a Chromium of their own (a *context*, keyed by the
+calling thread's `ea_context`), each driven from a dedicated thread: Playwright's sync objects are bound to the
+thread that made them, and tool calls arrive on arbitrary threads. A worker's browser closes when the worker
+finishes; a Chromium that died is relaunched on the next call.
 
 ### Roam and Otter
 
@@ -274,6 +277,14 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **Playwright "Cannot switch to a different thread" (greenlet), then every web call fails with TargetClosedError.**
+  Playwright's sync API may only be used from the thread that started it. Under the Agent SDK engine every tool
+  call runs on an `asyncio.to_thread` pool thread, so the browser worked only while one pool thread happened to
+  serve all calls; a worker running web research alongside the main agent put calls on a second thread and broke
+  the session for everyone (2026-11-10 and 2026-11-12). Fixed 2026-11-12: each context's browser lives on its
+  own thread and calls are marshalled to it (`ea/connectors/browser.py`), the SDK engine tags its dispatch
+  threads with the turn's context (`AgentSDKRunner._dispatch`), and a dead Chromium is relaunched.
 
 - Restart by `launchctl kickstart -k` or `bootout`/`bootstrap`, never `pkill` alone. Without
   `timeout_graceful_shutdown` uvicorn waited forever for open event streams, so a restart left the old process

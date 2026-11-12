@@ -312,7 +312,7 @@ class Agent:
             self.convo.set(f"sdk_session:{thread}", None)        # a worker never resumes
         try:
             final = runner.run_turn(user_text, system_text, thread, channel, mode, on_event, images=images,
-                                    drain=None if isolated else self._drain_for_turn)
+                                    drain=None if isolated else self._drain_for_turn, context=thread if isolated else "main")
         except RateLimited as e:
             log.warning("agent sdk: %s; redoing the turn over the API", e)
             return None if self.api_provider is not None else f"(model error: {e})"

@@ -114,6 +114,9 @@ class WorkerPool:
             log.exception("worker #%d failed", w.id)
         finally:
             w.finished = time.time()
+            browser = getattr(self.agent, "browser", None)
+            if browser is not None:
+                browser.close_context(w.conv_thread)   # its Chromium and browser thread, if it used the web
         log.info("worker #%d '%s' %s after %.1f min", w.id, w.name, "cancelled" if w.cancelled else "finished", (w.finished - w.started) / 60)
         self._changed()
         if w.cancelled:

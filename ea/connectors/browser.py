@@ -1,15 +1,24 @@
 """Headless web browsing for the agent: a real Chromium (Playwright) so pages that need JavaScript work.
 
-One browser per server process, started on first use; one "current page" the tools act on. Pages are read as
-text (title, condensed body text, the links on it), paged for long documents. Search goes through DuckDuckGo's
-HTML results page. Nothing is persisted between runs (no cookies, no logins)."""
+One browser per *context* (the main agent, and each background worker), started on first use; one "current
+page" per context that the tools act on. Pages are read as text (title, condensed body text, the links on it),
+paged for long documents. Search goes through DuckDuckGo's HTML results page. Nothing is persisted between runs
+(no cookies, no logins).
+
+Threads: Playwright's sync objects may only be touched from the thread that created them, and tool calls arrive
+on whatever thread the engine runs them on (a pool thread under the Agent SDK, the caller's thread under the API
+engine). So every context owns a thread of its own that does all its Playwright work; calls are handed to it
+and the result waited for. Which context a call belongs to comes from the calling thread's `ea_context`
+attribute (set by the worker pool on worker threads and by the SDK engine on its tool-dispatch threads); without
+it, the call is the main agent's. A browser whose Chromium has died is relaunched on the next call."""
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import threading
 import urllib.parse
-from typing import Any
+from typing import Any, Callable
 
 log = logging.getLogger(__name__)
 
@@ -37,15 +46,68 @@ def _condense(text: str) -> str:
     return text.strip()
 
 
+def current_context() -> str:
+    return getattr(threading.current_thread(), "ea_context", "") or "main"
+
+
 class _Ctx:
-    """One browser context's state: the main agent's, or a worker's (Playwright's sync objects are bound to the
-    thread that made them, so each worker thread gets its own)."""
-    def __init__(self) -> None:
+    """One context's browser state, driven from its own thread (see the module docstring)."""
+    def __init__(self, key: str) -> None:
+        self.key = key
         self.pw = None
         self.browser = None
         self.page = None
         self.last: dict[str, Any] = {}
-        self.lock = threading.RLock()
+        self._q: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, name=f"browser:{key}", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while True:
+            fn, box, done = self._q.get()
+            if fn is None:
+                return
+            try:
+                box["result"] = fn()
+            except BaseException as e:  # noqa: BLE001 - re-raised on the caller's thread
+                box["error"] = e
+            done.set()
+
+    def run(self, fn: Callable[[], Any]) -> Any:
+        """Run fn on this context's thread and return its result (or raise what it raised)."""
+        if threading.current_thread() is self._thread:
+            return fn()
+        box: dict[str, Any] = {}
+        done = threading.Event()
+        self._q.put((fn, box, done))
+        done.wait()
+        if "error" in box:
+            raise box["error"]
+        return box["result"]
+
+    def alive(self) -> bool:
+        try:
+            return self.page is not None and not self.page.is_closed() and self.browser.is_connected()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def discard(self) -> None:
+        """Close what is open (quietly: Chromium may already be gone). Runs on the context's thread."""
+        for closer in ((lambda: self.browser.close()) if self.browser else None, (lambda: self.pw.stop()) if self.pw else None):
+            try:
+                if closer:
+                    closer()
+            except Exception:  # noqa: BLE001
+                pass
+        self.pw = self.browser = self.page = None
+        self.last = {}
+
+    def stop(self) -> None:
+        try:
+            self.run(self.discard)
+        except Exception:  # noqa: BLE001
+            pass
+        self._q.put((None, None, None))
 
 
 class Browser:
@@ -57,28 +119,25 @@ class Browser:
 
     # ------------------------------------------------------------------ lifecycle
     def _ctx(self) -> _Ctx:
-        key = getattr(threading.current_thread(), "ea_context", "main")
+        key = current_context()
         with self._ctx_lock:
-            if key not in self._ctxs:
-                self._ctxs[key] = _Ctx()
-            return self._ctxs[key]
+            c = self._ctxs.get(key)
+            if c is None:
+                c = self._ctxs[key] = _Ctx(key)
+            return c
 
-    @property
-    def _lock(self) -> threading.RLock:
-        return self._ctx().lock
-
-    @property
-    def _last(self) -> dict[str, Any]:
-        return self._ctx().last
-
-    @_last.setter
-    def _last(self, value: dict[str, Any]) -> None:
-        self._ctx().last = value
-
-    def _ensure(self):
+    def _run(self, fn: Callable[[_Ctx], Any]) -> Any:
+        """Run fn(ctx) on the calling context's browser thread."""
         c = self._ctx()
-        if c.page is not None:
+        return c.run(lambda: fn(c))
+
+    def _ensure(self, c: _Ctx):
+        """The context's page, launching Chromium on first use and again if it died. Runs on the context's thread."""
+        if c.alive():
             return c.page
+        if c.browser is not None or c.pw is not None:
+            log.warning("browser[%s]: Chromium is gone; relaunching", c.key)
+            c.discard()
         from playwright.sync_api import sync_playwright
         c.pw = sync_playwright().start()
         c.browser = c.pw.chromium.launch(headless=True)
@@ -87,95 +146,110 @@ class Browser:
         c.page = ctx.new_page()
         return c.page
 
+    def contexts(self) -> dict[str, bool]:
+        """Context key -> whether its Chromium is up (for status reports)."""
+        with self._ctx_lock:
+            return {k: c.alive() for k, c in self._ctxs.items()}
+
+    def close_context(self, key: str) -> None:
+        """Shut one context's browser and thread (a worker that finished)."""
+        with self._ctx_lock:
+            c = self._ctxs.pop(key, None)
+        if c is not None:
+            c.stop()
+
     def close(self) -> None:
         with self._ctx_lock:
             ctxs = list(self._ctxs.values())
             self._ctxs.clear()
         for c in ctxs:
-            try:
-                if c.browser:
-                    c.browser.close()
-                if c.pw:
-                    c.pw.stop()
-            except Exception:  # noqa: BLE001
-                pass
+            c.stop()
 
-    # ------------------------------------------------------------------ reading
-    def _read(self, offset: int = 0, max_chars: int | None = None) -> dict[str, Any]:
-        page = self._ensure()
+    # ------------------------------------------------------------------ reading (all run on the context's thread)
+    def _read(self, c: _Ctx, offset: int = 0, max_chars: int | None = None) -> dict[str, Any]:
+        page = self._ensure(c)
         data = page.evaluate(TEXT_JS)
         text = _condense(data.get("text") or "")
-        self._last = {"url": data.get("url"), "title": data.get("title"), "text": text, "links": data.get("links") or [], "inputs": data.get("inputs") or []}
-        return self._slice(offset, max_chars)
+        c.last = {"url": data.get("url"), "title": data.get("title"), "text": text, "links": data.get("links") or [], "inputs": data.get("inputs") or []}
+        return self._slice(c, offset, max_chars)
 
-    def _slice(self, offset: int, max_chars: int | None) -> dict[str, Any]:
+    def _slice(self, c: _Ctx, offset: int, max_chars: int | None) -> dict[str, Any]:
         n = max_chars or self.max_chars
-        text = self._last.get("text", "")
+        text = c.last.get("text", "")
         chunk = text[offset:offset + n]
-        out = {"url": self._last.get("url"), "title": self._last.get("title"), "chars": len(text), "offset": offset, "text": chunk}
+        out = {"url": c.last.get("url"), "title": c.last.get("title"), "chars": len(text), "offset": offset, "text": chunk}
         if offset + n < len(text):
             out["next_offset"] = offset + n
-        links = self._last.get("links", [])
+        links = c.last.get("links", [])
         if offset == 0:
             out["links"] = links[:60]
             if len(links) > 60:
                 out["more_links"] = len(links) - 60
-            if self._last.get("inputs"):
-                out["form_fields"] = self._last["inputs"][:20]
+            if c.last.get("inputs"):
+                out["form_fields"] = c.last["inputs"][:20]
         return out
 
     def open(self, url: str, max_chars: int | None = None) -> dict[str, Any]:
         if not re.match(r"^https?://", url):
             url = "https://" + url
-        with self._lock:
-            page = self._ensure()
-            try:
-                page.goto(url, wait_until="domcontentloaded")
-                page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception as e:  # noqa: BLE001 - slow pages: read what we have
+        return self._run(lambda c: self._open(c, url, max_chars))
+
+    def _open(self, c: _Ctx, url: str, max_chars: int | None) -> dict[str, Any]:
+        page = self._ensure(c)
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception as e:  # noqa: BLE001 - slow pages: read what we have
+            if not c.alive():                   # Chromium died under us: once more on a fresh one
+                log.warning("browser[%s]: %s loading %s and Chromium is gone; relaunching", c.key, type(e).__name__, url)
+                self._ensure(c).goto(url, wait_until="domcontentloaded")
+            else:
                 log.info("browser: %s while loading %s; reading anyway", type(e).__name__, url)
-            return self._read(0, max_chars)
+        return self._read(c, 0, max_chars)
 
     def more(self, offset: int, max_chars: int | None = None) -> dict[str, Any]:
-        with self._lock:
-            if not self._last:
+        def go(c: _Ctx):
+            if not c.last:
                 return {"error": "no page open; use web_open first"}
-            return self._slice(offset, max_chars)
+            return self._slice(c, offset, max_chars)
+        return self._run(go)
 
     def links(self, contains: str = "", limit: int = 100) -> list[dict[str, Any]]:
-        with self._lock:
-            ls = self._last.get("links", [])
+        def go(c: _Ctx):
+            ls = c.last.get("links", [])
             if contains:
-                c = contains.lower()
-                ls = [l for l in ls if c in l["text"].lower() or c in l["href"].lower()]
+                cc = contains.lower()
+                ls = [l for l in ls if cc in l["text"].lower() or cc in l["href"].lower()]
             return ls[:limit]
+        return self._run(go)
 
     def click(self, link_text: str, max_chars: int | None = None) -> dict[str, Any]:
         """Follow a link by its visible text (first match, case-insensitive; or an exact href)."""
-        with self._lock:
-            page = self._ensure()
+        def go(c: _Ctx):
+            page = self._ensure(c)
             target = None
             lt = link_text.strip().lower()
-            for l in self._last.get("links", []):
+            for l in c.last.get("links", []):
                 if l["href"] == link_text or l["text"].lower() == lt:
                     target = l; break
             if target is None:
-                for l in self._last.get("links", []):
+                for l in c.last.get("links", []):
                     if lt in l["text"].lower():
                         target = l; break
             if target is None:
                 try:
                     page.get_by_role("link", name=link_text, exact=False).first.click()
                     page.wait_for_load_state("domcontentloaded")
-                    return self._read(0, max_chars)
+                    return self._read(c, 0, max_chars)
                 except Exception as e:  # noqa: BLE001
                     return {"error": f"no link matching {link_text!r} on this page ({type(e).__name__})"}
-            return self.open(target["href"], max_chars)
+            return self._open(c, target["href"], max_chars)
+        return self._run(go)
 
     def fill(self, field: str, value: str, submit: bool = False, max_chars: int | None = None) -> dict[str, Any]:
         """Type into a form field found by label, placeholder, name or id; optionally press Enter."""
-        with self._lock:
-            page = self._ensure()
+        def go(c: _Ctx):
+            page = self._ensure(c)
             loc = None
             for finder in (lambda: page.get_by_label(field, exact=False), lambda: page.get_by_placeholder(field, exact=False),
                            lambda: page.locator(f"[name='{field}']"), lambda: page.locator(f"#{field}")):
@@ -194,11 +268,12 @@ class Browser:
                     page.wait_for_load_state("networkidle", timeout=8000)
                 except Exception:  # noqa: BLE001
                     pass
-            return self._read(0, max_chars)
+            return self._read(c, 0, max_chars)
+        return self._run(go)
 
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
-        with self._lock:
-            page = self._ensure()
+        def go(c: _Ctx):
+            page = self._ensure(c)
             page.goto("https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query), wait_until="domcontentloaded")
             rows = page.evaluate("""() => [...document.querySelectorAll('.result')].map(r => ({
                 title: (r.querySelector('.result__a') || {}).innerText || '',
@@ -215,3 +290,4 @@ class Browser:
                 if len(out) >= limit:
                     break
             return out
+        return self._run(go)

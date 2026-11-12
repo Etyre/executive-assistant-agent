@@ -108,3 +108,13 @@ def test_cancel_worker():
     p.gate.set()
     a.workers.get(wid).thread.join(5)
     assert a.workers.status()[-1]["outcome"] == "cancelled"
+
+
+def test_finished_worker_closes_its_browser_context():
+    p = Scripted(); p.gate.set()
+    a, s = _agent(p)
+    closed = []
+    a.browser.close_context = closed.append
+    w = a.workers.start("a", "task A: anything")
+    w.thread.join(10)
+    assert closed == [w.conv_thread]
