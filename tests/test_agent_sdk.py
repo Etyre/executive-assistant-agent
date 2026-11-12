@@ -60,9 +60,12 @@ def test_turn_is_recorded_streamed_and_session_resumed(monkeypatch):
     a.activity = activity.append
     reply = a.handle("anything pending?", channel="app", on_event=events.append)
     assert reply == "Nothing pending."
-    # the prompt is the user's text; the system prompt carries the stable block and the volatile context; our tools only
+    # the message carries the situation (volatile context) then the user's text; the system prompt is the stable
+    # block only (a resumed session keeps it); our tools only
     o = seen["options"][0]
-    assert seen["prompts"] == ["anything pending?"] and "# NOW" in o.system_prompt and o.tools == [] and o.permission_mode == "bypassPermissions"
+    first = seen["prompts"][0]
+    assert first.startswith("# SITUATION") and "# NOW" in first and first.endswith("# THE MESSAGE\nanything pending?")
+    assert "# NOW" not in o.system_prompt and o.tools == [] and o.permission_mode == "bypassPermissions"
     assert PREFIX + "list_reminders" in o.allowed_tools and o.resume is None and o.setting_sources == []
     assert o.thinking == {"type": "adaptive", "display": "summarized"} and o.effort == s.llm.effort
     # streamed text and tool events reached the caller; activity feed saw everything
@@ -217,3 +220,26 @@ def test_tool_dispatch_threads_carry_the_turns_context(monkeypatch):
     asyncio.run(wrapped.handler({}))
     assert [c for _, c in seen] == ["worker:7", "main"]
     assert current_context() == "main"                      # the tag never leaks past the call
+
+
+def test_changed_standing_prompt_restarts_the_session_with_a_recap(monkeypatch):
+    """A resumed Claude Code session ignores a changed system prompt (verified 2026-11-12), so when the stable
+    block changes (code, standing instructions) the next turn starts a fresh session and recaps."""
+    from ea.agent import prompt as prompt_mod
+    a, s = _agent(monkeypatch)
+    seen = []
+
+    async def fake_query(*, prompt, options=None, transport=None):
+        seen.append((await _first_text(prompt), options))
+        yield sdk.AssistantMessage(content=[sdk.TextBlock(text="noted, resumed")], model="m")
+        yield sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1, session_id="sess-9", result="noted, resumed")
+    monkeypatch.setattr(sdk, "query", fake_query)
+    a.handle("one", channel="app")
+    a.handle("two", channel="app")
+    assert seen[1][1].resume == "sess-9"                                  # same instructions: resumed
+    stable = prompt_mod.stable_block
+    monkeypatch.setattr(prompt_mod, "stable_block", lambda settings: stable(settings) + "\n\nA new standing rule.")
+    a.handle("three", channel="app")
+    assert seen[2][1].resume is None and "instructions changed" in seen[2][1].system_prompt and "one" in seen[2][1].system_prompt
+    a.handle("four", channel="app")
+    assert seen[3][1].resume == "sess-9"                                  # and resumes again from there

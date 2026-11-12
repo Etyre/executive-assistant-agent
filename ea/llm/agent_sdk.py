@@ -9,11 +9,15 @@ same ToolRegistry, and reply text still streams to the caller.
 
 What changes under the SDK: history lives in the SDK session (resumed per thread; our `history_messages`
 window no longer applies), the model's built-in tools (files, bash, web) are turned off, and the volatile
-context block goes into the system prompt each turn instead of a trailing system message.
+context block (the situation: time, reminders, document roots, memory index, engine state) is prepended to the
+turn's user message instead of a trailing system message. It cannot go in the system prompt: a resumed Claude
+Code session keeps the system prompt it was created with and ignores a changed one (verified 2026-11-12), so
+only the stable block lives there, and when that changes the session is restarted with a recap.
 Switch back by setting `provider = "anthropic"` in config.toml and restarting."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import threading
 from typing import Any, Callable
@@ -49,6 +53,9 @@ def _text_of(content: Any) -> str:
 def _user_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     """One stream-json user message for the CLI's stdin (string content is fine, blocks let images through)."""
     return {"type": "user", "session_id": "", "message": {"role": "user", "content": blocks}, "parent_tool_use_id": None}
+
+
+SITUATION_HEAD = "# SITUATION (refreshed by the server every turn; not written by the user)"
 
 
 class RateLimited(LLMError):
@@ -193,9 +200,11 @@ class AgentSDKRunner:
     # ------------------------------------------------------------------ one turn
     def run_turn(self, user_text: str, system_text: str, thread: str, channel: str, mode: str,
                  on_event: Callable[[dict[str, Any]], None] | None = None, images: list[dict[str, Any]] | None = None,
-                 drain: Callable[[], list[dict[str, Any]]] | None = None, context: str = "main") -> str:
+                 drain: Callable[[], list[dict[str, Any]]] | None = None, context: str = "main",
+                 situation: str = "") -> str:
         """Called from Agent.handle (a worker thread): run the turn to completion on a private event loop.
         `context`: whose turn this is for per-context tool state ("main", or a worker's thread name).
+        `situation`: the volatile context block, sent ahead of the user's text in this turn's message.
         `drain`, when given, is polled while the turn runs and returns messages the user sent meanwhile
         ({"text", "images" (stored blocks), "inflated" (blocks for the model)}); each is handed to the running
         turn right away instead of waiting for it to end."""
@@ -204,7 +213,7 @@ class AgentSDKRunner:
 
         def runner() -> None:
             try:
-                result["text"] = asyncio.run(self._turn(user_text, system_text, on_event, images or [], drain))
+                result["text"] = asyncio.run(self._turn(user_text, system_text, on_event, images or [], drain, situation))
             except BaseException as e:  # noqa: BLE001
                 result["error"] = e
         t = threading.Thread(target=runner, name="agent-sdk-turn", daemon=True)
@@ -239,18 +248,28 @@ class AgentSDKRunner:
         )
 
     async def _turn(self, user_text: str, system_text: str, on_event: Callable[[dict[str, Any]], None] | None,
-                    images: list[dict[str, Any]] | None = None, drain: Callable[[], list[dict[str, Any]]] | None = None) -> str:
+                    images: list[dict[str, Any]] | None = None, drain: Callable[[], list[dict[str, Any]]] | None = None,
+                    situation: str = "") -> str:
         from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, UserMessage, query
         from claude_agent_sdk import TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock
 
         from claude_agent_sdk import RateLimitEvent
         key = f"sdk_session:{self._thread}"
         resume = self.convo.get(key)
+        # A resumed session keeps its original system prompt, so a changed one needs a fresh session.
+        sig_key, sig = f"sdk_system_sig:{self._thread}", hashlib.sha1(system_text.encode()).hexdigest()
         if resume and self.convo.get("sdk_resume_after_fallback"):
             # Turns ran over the API meanwhile; the SDK session never saw them. Start fresh with a recap.
             resume = None
             self.convo.set("sdk_resume_after_fallback", None)
             system_text += "\n\n# RECENT CONVERSATION (recap; your session was restarted)\n" + self._recap()
+        elif resume and self.convo.get(sig_key) not in (None, sig):
+            log.info("agent sdk: the standing prompt changed; starting a fresh session for %s with a recap", self._thread)
+            resume = None
+            system_text += ("\n\n# RECENT CONVERSATION (recap; your session was restarted because your standing "
+                            "instructions changed)\n" + self._recap())
+        self.convo.set(sig_key, sig)
+        first_text = (f"{SITUATION_HEAD}\n{situation}\n\n# THE MESSAGE\n" if situation else "") + user_text
         final = ""
         session_id = None
         options = self._options(system_text, resume)
@@ -263,7 +282,7 @@ class AgentSDKRunner:
             its next step. The stream ends once a result has arrived with nothing injected after it; the SDK
             then waits for the CLI to go idle before closing stdin (it keeps the MCP channel open for that), so
             a message the CLI queued for a follow-up turn of its own is not cut off."""
-            yield _user_message(list(images or []) + [{"type": "text", "text": user_text}])
+            yield _user_message(list(images or []) + [{"type": "text", "text": first_text}])
             if drain is None:
                 return
             while not state["result_seen"]:

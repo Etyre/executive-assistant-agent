@@ -76,7 +76,11 @@ is the same either way, and you can switch back and forth with a restart:
   the SDK's resumable session; every block is still mirrored into the conversation store, so the apps, the
   thinking pane and transcripts work unchanged. When the CLI reports the subscription window at
   `llm.api_fallback_utilization` (90%) or rejected, turns run over the API until the window resets, then the
-  SDK session restarts with a recap. `/health` → `engine` shows which is in use.
+  SDK session restarts with a recap. `/health` → `engine` shows which is in use. Only the stable prompt is the
+  session's system prompt; the per-turn context (time, reminders, document roots, memory index, engine state)
+  is sent as a "SITUATION" block ahead of the user's text in each turn's message, because a resumed session
+  keeps the system prompt it was created with. When the stable prompt changes (code, standing instructions),
+  the next turn starts a fresh session with a recap.
 - `anthropic`: the Messages API with the API key, the original loop.
 - `openai_compat`: a local open-weight model.
 
@@ -277,6 +281,13 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **A resumed Claude Code session ignores a changed `system_prompt`.** Verified 2026-11-12 with a two-turn probe
+  (prompt "the code word is APPLE", then resume with "BANANA": the model quotes APPLE). For five days the agent's
+  per-turn context (time, reminders, memory index, document roots) only refreshed when the CLI happened to
+  rebuild its context, which is why it said it could not see `source_docs` after the prompt named the folder.
+  Now the volatile block rides in the user message and the stable block is hashed per thread
+  (`sdk_system_sig:<thread>`); a change restarts the session with a recap.
 
 - **Playwright "Cannot switch to a different thread" (greenlet), then every web call fails with TargetClosedError.**
   Playwright's sync API may only be used from the thread that started it. Under the Agent SDK engine every tool

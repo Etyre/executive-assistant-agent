@@ -301,10 +301,13 @@ class Agent:
         """One turn through the Agent SDK. Returns None when the subscription is rate-limited and the caller
         should redo the turn over the API. `isolated`: a worker, on a runner of its own (fresh session)."""
         from ..llm.agent_sdk import AgentSDKRunner, ContactedEli, RateLimited
-        system_text = (prompt.stable_block(self.settings) + "\n\n" + prompt.volatile_block(self.settings, self.memory, self.convo, channel, mode)
-                       + "\n\n# ENGINE\n" + self.sdk.prompt_line())
+        # Only the stable block is the system prompt (a resumed SDK session keeps it); everything that changes
+        # between turns rides in front of the user's message as the situation.
+        system_text = prompt.stable_block(self.settings)
         if mode == "worker":
             system_text += "\n\n" + WORKER_ADDENDUM
+        situation = (prompt.volatile_block(self.settings, self.memory, self.convo, channel, mode)
+                     + "\n\n# ENGINE\n" + self.sdk.prompt_line())
         runner = self.sdk
         if isolated:
             runner = AgentSDKRunner(self.settings, self.tools, self.convo, self._emit, self.provider)
@@ -312,7 +315,8 @@ class Agent:
             self.convo.set(f"sdk_session:{thread}", None)        # a worker never resumes
         try:
             final = runner.run_turn(user_text, system_text, thread, channel, mode, on_event, images=images,
-                                    drain=None if isolated else self._drain_for_turn, context=thread if isolated else "main")
+                                    drain=None if isolated else self._drain_for_turn, context=thread if isolated else "main",
+                                    situation=situation)
         except RateLimited as e:
             log.warning("agent sdk: %s; redoing the turn over the API", e)
             return None if self.api_provider is not None else f"(model error: {e})"
