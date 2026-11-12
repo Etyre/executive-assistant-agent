@@ -21,9 +21,11 @@ Offline support built the same evening: history cached in the app, messages type
 and sent when it returns. Still to do: (a) Eli opens Atlas on the phone and scans the setup QR
 (`atlas://setup?url=…&token=…`; regenerate with any QR tool from `EA_WEB_TOKEN` and `http://Elis-MacBook-Pro-2.local:8800`);
 (b) ~~agree to the PLA~~ done 21:20; `build-ios.sh` then created the push App ID and the build with
-`aps-environment` is installed on the phone (verified with codesign). Push now waits only on the APNs key (step 6:
-developer.apple.com → Keys → + → APNs; .p8 into `data/`, `APNS_KEY_PATH/KEY_ID/TEAM_ID=DW72928GK6` in `data/.env`,
-restart serve); (c) Tailscale (6c) for use away from home. Speech-to-text one-button entry: not built; the recipe
+`aps-environment` is installed on the phone (verified with codesign). APNs key created 21:25 (Sandbox & Production, team
+scoped), installed in `data/` and `data/.env`; `ea check` says `push: configured (com.elityre.atlas)`. Push to the
+phone is live as soon as the app registers a device (open it, scan the QR, allow notifications), then
+`python -m ea push-test`. Nightblock still needs `api.push.apple.com` / `api.sandbox.push.apple.com` allowed (step 3)
+for overnight pushes; (c) Tailscale (6c) for use away from home. Speech-to-text one-button entry: not built; the recipe
 is `ios/SHORTCUT.md` (Shortcut: Dictate Text → POST /api/message → Speak), ~3 minutes by hand in Shortcuts.
 Also 2026-11-11: every proactive turn now starts with `config.WAKEUP_RULE` (read checklist + Toggl first), at the
 agent's own request.
