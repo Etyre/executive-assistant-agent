@@ -1,0 +1,60 @@
+"""tracker_open: the agent starts the Project Tracker app when its API is not answering."""
+import pathlib
+
+from ea import config
+from ea.connectors import project_tracker as pt
+from ea.connectors.http import ServiceRouter, SourceError
+from ea.tools.registry import ToolRegistry
+from ea.tools import tracker_tools
+
+
+def _tracker(tmp_path, monkeypatch, bridge=""):
+    config.load.cache_clear()
+    s = config.load()
+    s.sources.bridge_url = bridge
+    app = tmp_path / "Project Tracker.app"; app.mkdir()
+    s.sources.tracker_app = str(app)
+    t = pt.ProjectTracker(ServiceRouter(s), s)
+    opened = []
+    monkeypatch.setattr(pt.subprocess, "run", lambda cmd, **k: opened.append(cmd))
+    monkeypatch.setattr(pt.time, "sleep", lambda s: None)
+    return t, app, opened
+
+
+def test_launch_opens_the_app_and_waits_for_its_api(tmp_path, monkeypatch):
+    t, app, opened = _tracker(tmp_path, monkeypatch)
+    pings = iter([False, False, True])
+    monkeypatch.setattr(t, "running", lambda: next(pings))
+    out = t.launch()
+    assert out["ok"] and out["status"] == "started"
+    assert opened == [["open", "-g", str(app)]]            # -g: the window must not steal focus
+
+
+def test_launch_is_a_no_op_when_running_and_honest_when_it_cannot(tmp_path, monkeypatch):
+    t, app, opened = _tracker(tmp_path, monkeypatch)
+    monkeypatch.setattr(t, "running", lambda: True)
+    assert t.launch() == {"ok": True, "status": "already running"} and opened == []
+    monkeypatch.setattr(t, "running", lambda: False)
+    t.app_path = str(tmp_path / "missing.app")
+    assert "not found" in t.launch()["error"] and opened == []
+    t.app_path = str(app)
+    monkeypatch.setattr(pt.time, "time", iter([0, 0, 100, 100]).__next__)
+    out = t.launch(wait_seconds=5)
+    assert not out["ok"] and "did not answer" in out["error"] and opened == [["open", "-g", str(app)]]
+
+
+def test_launch_refuses_through_the_bridge(tmp_path, monkeypatch):
+    t, app, opened = _tracker(tmp_path, monkeypatch, bridge="http://100.1.1.1:8799")
+    monkeypatch.setattr(t, "running", lambda: False)
+    assert "bridge" in t.launch()["error"] and opened == []
+
+
+def test_tracker_tools_point_at_tracker_open_when_the_app_is_down(tmp_path, monkeypatch):
+    config.load.cache_clear()
+    s = config.load()
+    s.sources.tracker_url = "http://127.0.0.1:1"            # nothing listens there
+    reg = ToolRegistry()
+    tracker_tools.register(reg, ServiceRouter(s), s)
+    out, err = reg.dispatch("tracker_feed", {})
+    assert not err and "tracker_open" in out and "not answering" in out
+    assert "tracker_open" in reg.names()

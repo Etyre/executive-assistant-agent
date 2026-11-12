@@ -9,12 +9,15 @@ which has no auth and is only reachable on localhost or through the bridge. The 
 for the agent: the user ticks it, so there is deliberately no write path to it here."""
 from __future__ import annotations
 
+import pathlib
+import subprocess
+import time
 from typing import Any
 
 import httpx
 
 from .. import config
-from .http import ServiceRouter, get_json, send_json
+from .http import ServiceRouter, SourceError, get_json, send_json
 
 SCHEDULE_KINDS = ("task", "routine", "exercise", "journal", "break", "meeting", "checklist")
 
@@ -24,6 +27,7 @@ class ProjectTracker:
         self.router = router
         s = settings or config.load()
         self.headers = {"X-Agent-Name": s.agent_name}
+        self.app_path = s.sources.tracker_app
         tok = config.secret(s.sources.tracker_agent_token_env)
         if tok:
             self.headers["Authorization"] = f"Bearer {tok}"
@@ -37,6 +41,31 @@ class ProjectTracker:
     def ping(self) -> dict[str, Any]:
         with self._c() as c:
             return get_json(c, "/api/agent")
+
+    def running(self) -> bool:
+        try:
+            self.ping()
+            return True
+        except SourceError:
+            return False
+
+    def launch(self, wait_seconds: float = 20.0) -> dict[str, Any]:
+        """Start the Project Tracker app when its API is not answering. Only possible on the Mac itself (through
+        the bridge the app is on another machine). `open -g` so the window does not take the user's focus."""
+        if self.running():
+            return {"ok": True, "status": "already running"}
+        if self.router.bridge:
+            return {"ok": False, "error": "the tracker is reached through the Mac bridge; it can only be started on the Mac itself"}
+        app = pathlib.Path(self.app_path).expanduser()
+        if not app.exists():
+            return {"ok": False, "error": f"tracker app not found at {app}; set sources.tracker_app"}
+        subprocess.run(["open", "-g", str(app)], check=True, timeout=15)
+        t0 = time.time()
+        while time.time() - t0 < wait_seconds:
+            if self.running():
+                return {"ok": True, "status": "started", "seconds": round(time.time() - t0, 1)}
+            time.sleep(1)
+        return {"ok": False, "error": f"opened {app.name} but its API did not answer within {wait_seconds:.0f}s; see launcher.log in its data folder"}
 
     def tree(self) -> dict[str, Any]:
         """{projects: [{id, parent_id, name, path, notes, source, open_tasks, notes_added}], tree: nested}"""

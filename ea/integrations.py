@@ -52,7 +52,7 @@ def _tracker(s: config.Settings) -> tuple[str, str]:
         ping = ProjectTracker(ServiceRouter(s), s).ping()
         return "ok", f"reachable; token required: {ping.get('token_required')}"
     except SourceError as e:
-        return "missing", f"not reachable ({str(e)[:80]}); the Task Tracker app must be running on the Mac"
+        return "missing", f"not reachable ({str(e)[:80]}); the agent can start it with tracker_open (sources.tracker_app)"
 
 
 def _local(url_attr: str, name: str) -> Callable[[config.Settings], tuple[str, str]]:

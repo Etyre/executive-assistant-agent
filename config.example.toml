@@ -28,6 +28,7 @@ toggl_source = "focus_monitor"   # or "toggl": call Toggl's API directly (needs 
 bridge_url = ""                 # e.g. "http://100.101.102.103:8799"; empty = talk to localhost directly
 # Mac / Mac mini deployment: direct.
 tracker_url = "http://127.0.0.1:8791"
+tracker_app = "~/Documents/agent-coding/project-tracker-and-organizer/dist/Project Tracker.app"  # tracker_open starts it when its API is down
 focus_url   = "http://127.0.0.1:8790"
 bandit_url  = "http://127.0.0.1:8777"
 timeout_seconds = 20

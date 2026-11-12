@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import config
+from ..connectors.http import SourceError
 from ..connectors.http import ServiceRouter
 from ..connectors.project_tracker import SCHEDULE_KINDS, ProjectTracker
 from .registry import ToolRegistry
@@ -30,24 +31,45 @@ SCHEDULE_ITEM = {
 def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings | None = None) -> ProjectTracker:
     tracker = ProjectTracker(router, settings)
 
+    def guard(fn):
+        """The app is not running: say so and point at tracker_open instead of a bare connection error."""
+        def run(*a, **k):
+            try:
+                return fn(*a, **k)
+            except SourceError as e:
+                if "Connect" in str(e):
+                    return {"error": f"the Project Tracker app is not answering ({str(e)[:120]}); start it with tracker_open, then retry"}
+                raise
+        run.__name__ = fn.__name__
+        return run
+
+    @reg.tool("tracker_open", "Start the Project Tracker app on the Mac if it is not running (its API is unreachable) and wait "
+              "for it to answer. Safe when it is already running.", writes=True)
+    def tracker_open() -> Any:
+        return tracker.launch()
+
     @reg.tool("tracker_outline", "The open project/task outline as indented text: '* Project (project ID)' lines and "
               "'- [task ID] title due.. pN BLOCKING ~Nm' lines, with any notes you attached. Use the IDs in other tools.")
+    @guard
     def tracker_outline() -> Any:
         return tracker.outline()
 
     @reg.tool("tracker_find_tasks", "Find open tasks by text (title/description) and/or project id. Returns tasks with their project path.",
               {"properties": {"q": {"type": "string"}, "project_id": {"type": "integer"}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}})
+    @guard
     def tracker_find_tasks(q: str = "", project_id: int | None = None, limit: int = 50) -> Any:
         return tracker.find_tasks(q, project_id, limit)
 
     @reg.tool("tracker_task", "Full detail of one task: description, dates, priority, tracked minutes, project path, notes attached.",
               {"properties": {"task_id": {"type": "integer"}}, "required": ["task_id"]})
+    @guard
     def tracker_task(task_id: int) -> Any:
         return tracker.task(task_id)
 
     @reg.tool("tracker_quick_add", "Add tasks from free text; the tracker's Claude files them under the right projects and "
               "parses tags like #p1 #due:fri #blocking. Good default for new tasks. Returns the created task(s) and where they went.",
               {"properties": {"text": {"type": "string"}}, "required": ["text"]}, writes=True)
+    @guard
     def tracker_quick_add(text: str) -> Any:
         return tracker.quick_add(text)
 
@@ -62,6 +84,7 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
                               "blocking": {"type": "boolean"}, "blocking_for": {"type": "string"},
                               "estimate_minutes": {"type": "integer"}, "note": {"type": "string"}},
                "required": ["title"]}, writes=True)
+    @guard
     def tracker_create_task(title: str, **fields: Any) -> Any:
         return tracker.create_task(title, **fields)
 
@@ -69,6 +92,7 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
               {"properties": {"name": {"type": "string"}, "parent_id": {"type": "integer"},
                               "parent_path": {"type": "array", "items": {"type": "string"}}, "notes": {"type": "string"}},
                "required": ["name"]}, writes=True)
+    @guard
     def tracker_create_project(name: str, parent_id: int | None = None, parent_path: list[str] | None = None, notes: str = "") -> Any:
         return tracker.create_project(name, parent_id, parent_path, notes)
 
@@ -76,15 +100,18 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
               "the user's own text). The tracker's planner also reads task notes. Give exactly one of task_id, project_id.",
               {"properties": {"body": {"type": "string"}, "task_id": {"type": "integer"}, "project_id": {"type": "integer"}},
                "required": ["body"]}, writes=True)
+    @guard
     def tracker_add_note(body: str, task_id: int | None = None, project_id: int | None = None) -> Any:
         return tracker.add_note(body, task_id, project_id)
 
     @reg.tool("tracker_notes", "Notes you have attached: to one task, one project, or all of them.",
               {"properties": {"task_id": {"type": "integer"}, "project_id": {"type": "integer"}}})
+    @guard
     def tracker_notes(task_id: int | None = None, project_id: int | None = None) -> Any:
         return tracker.notes(task_id, project_id)
 
     @reg.tool("tracker_delete_note", "Take back one of your notes.", {"properties": {"note_id": {"type": "integer"}}, "required": ["note_id"]}, writes=True)
+    @guard
     def tracker_delete_note(note_id: int) -> Any:
         return tracker.delete_note(note_id)
 
@@ -94,11 +121,13 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
                               "importance": {"type": "integer", "minimum": 1, "maximum": 5}, "blocking": {"type": "boolean"},
                               "blocking_for": {"type": "string"}, "estimate_minutes": {"type": "integer"}},
                "required": ["task_id"]}, writes=True)
+    @guard
     def tracker_update_task(task_id: int, **fields: Any) -> Any:
         return tracker.update_task(task_id, **fields)
 
     @reg.tool("tracker_complete_task", "Mark a task done (or undo that).",
               {"properties": {"task_id": {"type": "integer"}, "undo": {"type": "boolean"}}, "required": ["task_id"]}, writes=True)
+    @guard
     def tracker_complete_task(task_id: int, undo: bool = False) -> Any:
         return tracker.complete_task(task_id, undo)
 
@@ -107,16 +136,19 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
               "notes, routines, today's exercise, the user's scheduling rules document and any standing instructions for the day. "
               "Call this before tracker_set_schedule.",
               {"properties": {"date": DATE}})
+    @guard
     def tracker_schedule_context(date: str | None = None) -> Any:
         return tracker.schedule_context(date)
 
     @reg.tool("tracker_feed", "What the tracker is showing right now: current block, up next, meetings, progress, running timer, "
               "today's exercise, whether the day is off track.")
+    @guard
     def tracker_feed() -> Any:
         return tracker.feed()
 
     @reg.tool("tracker_checklist", "Today's daily checklist (habits) with done/not-done state. Read-only: the user "
               "ticks items themselves; you never mark one done.")
+    @guard
     def tracker_checklist() -> Any:
         return tracker.checklist()
 
@@ -130,6 +162,7 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
                               "rationale": {"type": "string", "description": "One or two sentences shown in the tracker."},
                               "pin": {"type": "boolean", "description": "default true"}},
                "required": ["items"]}, writes=True)
+    @guard
     def tracker_set_schedule(items: list[dict[str, Any]], date: str | None = None, work_start: str | None = None,
                              work_end: str | None = None, rationale: str = "", pin: bool = True) -> Any:
         return tracker.set_schedule(items, date, work_start, work_end, rationale, pin)
@@ -139,20 +172,24 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
               "these appended to the user's rules (that unpins the day) and shows them on the plan page.",
               {"properties": {"text": {"type": "string"}, "date": DATE, "rebuild": {"type": "boolean", "description": "default true"}},
                "required": ["text"]}, writes=True)
+    @guard
     def tracker_set_day_instructions(text: str, date: str | None = None, rebuild: bool = True) -> Any:
         return tracker.set_day_instructions(text, date, rebuild)
 
     @reg.tool("tracker_clear_day_instructions", "Drop the standing instructions for a day.", {"properties": {"date": DATE}}, writes=True)
+    @guard
     def tracker_clear_day_instructions(date: str | None = None) -> Any:
         return tracker.clear_day_instructions(date)
 
     @reg.tool("tracker_rebuild_schedule", "Let the tracker plan the day itself (its own Claude scheduler), optionally from now "
               "and/or extending the work day until HH:MM. This replaces and unpins a schedule you set.",
               {"properties": {"from_now": {"type": "boolean"}, "until": HM, "date": DATE}}, writes=True)
+    @guard
     def tracker_rebuild_schedule(from_now: bool = True, until: str | None = None, date: str | None = None) -> Any:
         return tracker.rebuild_plan(from_now, until, date)
 
     @reg.tool("tracker_unpin_schedule", "Hand a pinned day back to the tracker's automatic re-planner.", {"properties": {"date": DATE}}, writes=True)
+    @guard
     def tracker_unpin_schedule(date: str | None = None) -> Any:
         return tracker.unpin_plan(date)
 

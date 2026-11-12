@@ -72,6 +72,7 @@ class SourceSettings:
     bridge_url: str = ""                      # e.g. http://100.x.y.z:8799  (empty = direct)
     bridge_token_env: str = "EA_BRIDGE_TOKEN"
     tracker_url: str = "http://127.0.0.1:8791"
+    tracker_app: str = "~/Documents/agent-coding/project-tracker-and-organizer/dist/Project Tracker.app"  # started by tracker_open when its API is down
     focus_url: str = "http://127.0.0.1:8790"
     bandit_url: str = "http://127.0.0.1:8777"
     exercise_export_url_env: str = "EXERCISE_EXPORT_URL"
