@@ -69,6 +69,8 @@ def _local(url_attr: str, name: str) -> Callable[[config.Settings], tuple[str, s
 
 
 def _toggl(s: config.Settings) -> tuple[str, str]:
+    if s.sources.toggl_source == "focus_monitor":
+        return ("ok", "read from the Focus Monitor's Toggl sync (no Toggl API calls from here)")
     return ("ok", "token set") if config.secret(s.sources.toggl_token_env) else ("missing", "TOGGL_API_TOKEN not set")
 
 
@@ -159,7 +161,7 @@ INTEGRATIONS: list[Integration] = [
                 "launch dist/Task Tracker.app; optional token in its Settings -> Assistant agent, mirrored as AGENT_API_TOKEN", _tracker),
     Integration("focus", "Focus Monitor", "window-level focus/distraction metrics", "Eli", ["Focus Monitor running on :8790"], "launch the Focus Monitor app", _local("focus_url", "Focus Monitor")),
     Integration("bandit", "Sleep Bandit + Oura", "sleep, HRV, readiness, checklist (read-only)", "Eli", ["Sleep Bandit running on :8777"], "launch Sleep Bandit (launchd: com.elityre.sleep-bandit)", _local("bandit_url", "Sleep Bandit")),
-    Integration("toggl", "Toggl", "time entries", "Eli", ["TOGGL_API_TOKEN"], "Toggl -> Profile -> API token, into data/.env", _toggl),
+    Integration("toggl", "Toggl", "time entries", "Eli", ["Focus Monitor running on :8790 (or TOGGL_API_TOKEN with toggl_source = \"toggl\")"], "default: nothing, the Focus Monitor syncs Toggl; direct: Toggl -> Profile -> API token, into data/.env", _toggl),
     Integration("exercise", "Exercise log", "workout sessions", "Eli", ["EXERCISE_EXPORT_URL"], "the Apps Script /exec URL from the tracker's Settings page, into data/.env", _exercise, optional=True),
     Integration("calendar", "Google Calendar", "events (iCal feeds)", "Eli", ["CALENDAR_ICS_URLS"], "Google Calendar -> settings -> 'Secret address in iCal format', comma-separated into data/.env", _calendar, optional=True),
     Integration("otter", "Otter.ai", "every voice recording, read as it arrives + full-text history", "Eli", ["OTTER_EMAIL", "OTTER_PASSWORD"],

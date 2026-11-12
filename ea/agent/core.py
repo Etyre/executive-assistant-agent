@@ -38,7 +38,7 @@ class Agent:
         self.memory = MemoryStore(self.settings.memory_dir)
         self.convo = ConversationStore(self.settings.state_db, self.settings.transcripts_dir)
         self.router = router or ServiceRouter(self.settings)
-        self.toggl = Toggl(self.settings)
+        self.toggl = Toggl(self.settings, self.router)
         self.exercise = Exercise(self.settings)
         self.otter = Otter(self.settings)
         self.roam = Roam(self.settings)

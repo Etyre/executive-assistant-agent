@@ -23,6 +23,7 @@ max_tool_rounds = 20
 # openai_base_url = "http://127.0.0.1:11434/v1"
 
 [sources]
+toggl_source = "focus_monitor"   # or "toggl": call Toggl's API directly (needs TOGGL_API_TOKEN)
 # Cloud deployment: reach the Mac through the bridge over Tailscale.
 bridge_url = ""                 # e.g. "http://100.101.102.103:8799"; empty = talk to localhost directly
 # Mac / Mac mini deployment: direct.

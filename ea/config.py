@@ -85,6 +85,8 @@ class SourceSettings:
     otter_ingest: bool = True                             # the scheduler pulls new recordings and the agent reads each one
     otter_ingest_max_chars: int = 60_000                  # transcript text handed to the agent per recording (rest via otter_transcript)
     toggl_workspace_id: int | None = None
+    toggl_source: str = "focus_monitor"                   # "focus_monitor": read the Focus Monitor's synced Toggl table (no Toggl API calls,
+                                                          # no shared quota; lags Toggl by up to 5 min); "toggl": call Toggl's API directly
     timeout_seconds: float = 20.0
     roam_backup_git: str = ""                             # git URL of the daily Roam backup (JSON); cloned to data/roam/backup and pulled on a schedule
     roam_sync_hours: float = 6.0                          # how often to pull it

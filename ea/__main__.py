@@ -140,8 +140,8 @@ def cmd_check(args: argparse.Namespace) -> None:
     probe("focus monitor", lambda: f"{len(FocusMonitor(router).metrics(3))} days of metrics")
     probe("sleep bandit", lambda: f"{len(SleepBandit(router).summary(3).get('nights', []))} nights")
     probe("oura (via sleep bandit)", lambda: f"{len(SleepBandit(router).oura('daily_readiness', 3).get('data', []))} readiness days")
-    tg = Toggl(s)
-    probe("toggl", lambda: f"{len(tg.entries(3))} entries in 3 days" if tg.enabled() else "disabled (TOGGL_API_TOKEN not set)")
+    tg = Toggl(s, router)
+    probe("toggl", lambda: f"{len(tg.entries(3))} entries in 3 days, {tg.describe()}" if tg.enabled() else "disabled (TOGGL_API_TOKEN not set)")
     ex = Exercise(s)
     probe("exercise log", lambda: f"{len(ex.sessions(30))} sessions in 30 days" if ex.enabled() else "disabled (EXERCISE_EXPORT_URL not set)")
     from .connectors.otter import Otter

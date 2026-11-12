@@ -8,19 +8,28 @@ from typing import Any
 import httpx
 
 from .. import config
-from .http import SourceError
+from .http import ServiceRouter, SourceError, get_json
 
 API = "https://api.track.toggl.com/api/v9"
 
 
 class Toggl:
-    def __init__(self, settings: config.Settings | None = None):
+    """Toggl time entries. Two sources: the Focus Monitor's local copy (default since 2026-11-11: it already syncs
+    Toggl every 5 minutes, and the agent's own polling kept exhausting the shared hourly API quota), or Toggl's
+    API directly (`sources.toggl_source = "toggl"`). Same shapes either way."""
+
+    def __init__(self, settings: config.Settings | None = None, router: ServiceRouter | None = None):
         s = settings or config.load()
         self.token = config.secret(s.sources.toggl_token_env)
+        self.via_focus = s.sources.toggl_source == "focus_monitor"
+        self.router = router or (ServiceRouter(s) if self.via_focus else None)
         self._projects: dict[int, str] | None = None
 
     def enabled(self) -> bool:
-        return bool(self.token)
+        return self.via_focus or bool(self.token)
+
+    def describe(self) -> str:
+        return "via Focus Monitor (its 5-minute Toggl sync)" if self.via_focus else "Toggl API v9"
 
     def _client(self) -> httpx.Client:
         if not self.token:
@@ -44,11 +53,17 @@ class Toggl:
         return self._projects
 
     def current(self) -> dict[str, Any] | None:
+        if self.via_focus:
+            with self.router.client("focus") as c:
+                return get_json(c, "/api/toggl/current") or None
         e = self._get("/me/time_entries/current")
         return self._shape(e) if e else None
 
     def entries(self, days: int = 7) -> list[dict[str, Any]]:
         days = max(1, min(days, 90))
+        if self.via_focus:
+            with self.router.client("focus") as c:
+                return list(get_json(c, "/api/toggl/entries", days=days) or [])
         end = dt.date.today() + dt.timedelta(days=1)
         start = dt.date.today() - dt.timedelta(days=days)
         raw = self._get("/me/time_entries", start_date=start.isoformat(), end_date=end.isoformat()) or []

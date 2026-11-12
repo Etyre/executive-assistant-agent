@@ -36,7 +36,7 @@ notification is what reaches Eli.
 
 | Source | Access | How |
 |---|---|---|
-| Toggl Track | read | Toggl API v9 with `TOGGL_API_TOKEN` (current entry, entries, per-day/project summary) |
+| Toggl Track | read | by default the Focus Monitor's synced copy (`/api/toggl/current`, `/api/toggl/entries`; it polls Toggl every 5 min, so "current" can lag that much); `sources.toggl_source = "toggl"` calls Toggl API v9 directly with `TOGGL_API_TOKEN`. Switched 2026-11-11: the agent's own polling kept hitting Toggl's hourly quota, shared with the Focus Monitor |
 | Focus Monitor | read | `GET /api/metrics`, `/api/day` on :8790 (daily focus spans, distractions, totals) |
 | Oura ring | read | through Sleep Bandit's OAuth token: new `GET /api/oura/collection?name=daily_readiness&days=N` on :8777 (sleep, readiness, activity, stress, heartrate…) |
 | Sleep Bandit | read | new `GET /api/agent/summary?days=N` on :8777: nights, metrics, tonight's checklist, verdicts, HRV readiness status (no planning side effect) |

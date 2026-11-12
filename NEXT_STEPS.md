@@ -30,7 +30,9 @@ for overnight pushes; (c) Tailscale: the Mac is on it since 21:50 (App Store app
 same account, then the setup QR with the tailnet URL (Eli was on a coworking Wi-Fi that isolates devices, so the
 `.local` route never connected). No Funnel: nothing is public; push does not need it. Speech-to-text one-button entry: not built; the recipe
 is `ios/SHORTCUT.md` (Shortcut: Dictate Text → POST /api/message → Speak), ~3 minutes by hand in Shortcuts.
-Also 2026-11-11 late: messages sent while the agent is mid-turn now reach it right away on the SDK engine too
+Also 2026-11-11 late: Toggl is now read from the Focus Monitor's synced table (`sources.toggl_source`, default
+`focus_monitor`; `"toggl"` goes direct again), because the agent's own polling kept hitting the hourly Toggl quota
+the two apps share; the Focus Monitor got two read endpoints for it and was restarted. Messages sent while the agent is mid-turn now reach it right away on the SDK engine too
 (streaming input to the CLI; before, they waited for the turn to end and arrived in a batch, which Eli saw from
 the phone). Every proactive turn now starts with `config.WAKEUP_RULE` (read checklist + Toggl first), at the
 agent's own request.
