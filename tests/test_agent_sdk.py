@@ -14,7 +14,17 @@ def _agent(monkeypatch):
     s = config.load()
     s.llm.provider = "agent_sdk"
     s.sources.otter_logseq_graph = ""
-    return Agent(s), s
+    a = Agent(s)
+    a.convo.set("sdk_api_fallback_until", None)     # the session-wide test data dir keeps an earlier test's fallback window
+    return a, s
+
+
+async def _first_text(prompt):
+    """The runner streams its input: the first message is the user's text (plus any image blocks)."""
+    if isinstance(prompt, str):
+        return prompt
+    first = await prompt.__anext__()
+    return next(b["text"] for b in first["message"]["content"] if b.get("type") == "text")
 
 
 def test_tools_are_wrapped_as_mcp_tools(monkeypatch):
@@ -35,7 +45,7 @@ def test_turn_is_recorded_streamed_and_session_resumed(monkeypatch):
     seen = {"prompts": [], "options": []}
 
     async def fake_query(*, prompt, options=None, transport=None):
-        seen["prompts"].append(prompt); seen["options"].append(options)
+        seen["prompts"].append(await _first_text(prompt)); seen["options"].append(options)
         yield sdk.SystemMessage(subtype="init", data={"session_id": "sess-1"})
         yield sdk.AssistantMessage(content=[sdk.ThinkingBlock(thinking="I should check reminders.", signature="x"),
                                             sdk.ToolUseBlock(id="tu1", name=PREFIX + "list_reminders", input={})], model="m")
@@ -156,3 +166,37 @@ def test_usage_is_tracked_and_user_warned_once_per_window(monkeypatch):
     from ea import integrations
     eng = next(r for r in integrations.status(s) if r["key"] == "engine")
     assert eng["state"] == "partial" and "api" in eng["detail"]
+
+
+def test_message_sent_mid_turn_reaches_the_running_turn(monkeypatch):
+    """Eli, 2026-11-11: on the SDK engine a message typed while the agent worked only started the next turn, in a
+    batch. Now the runner polls the inbox and writes it to the CLI's stdin as a further user message."""
+    a, s = _agent(monkeypatch)
+    seen = {"injected": []}
+
+    async def fake_query(*, prompt, options=None, transport=None):
+        first = await prompt.__anext__()
+        yield sdk.SystemMessage(subtype="init", data={"session_id": "sess-2"})
+        yield sdk.AssistantMessage(content=[sdk.ToolUseBlock(id="tu1", name=PREFIX + "list_reminders", input={})], model="m")
+        assert a.submit("also check the calendar", channel="app", client_id="phone") is True     # typed meanwhile
+        nxt = await prompt.__anext__()                                   # the runner hands it over before the turn ends
+        seen["injected"].append(nxt["message"]["content"][-1]["text"])
+        yield sdk.UserMessage(content=[sdk.ToolResultBlock(tool_use_id="tu1", content=[{"type": "text", "text": "[]"}], is_error=False)])
+        yield sdk.AssistantMessage(content=[sdk.TextBlock(text="Nothing pending, calendar clear.")], model="m")
+        yield sdk.ResultMessage(subtype="success", duration_ms=10, duration_api_ms=8, is_error=False, num_turns=2, session_id="sess-2",
+                                result="Nothing pending, calendar clear.", total_cost_usd=0.01)
+        try:
+            await prompt.__anext__()
+        except StopAsyncIteration:
+            pass                                                        # the stream ends after the result
+    monkeypatch.setattr(sdk, "query", fake_query)
+    said = []
+    a.on_message = said.append
+    reply = a.handle("anything pending?", channel="app")
+    assert reply == "Nothing pending, calendar clear."
+    from ea.agent.conversations import MID_TURN_PREFIX
+    assert seen["injected"] == [MID_TURN_PREFIX + "also check the calendar"]
+    # recorded in the conversation (prefix stripped for readers) and announced to the other clients, once
+    assert [m["text"] for m in a.convo.readable(10) if m["who"] == "me"][-2:] == ["anything pending?", "also check the calendar"]
+    assert [m["text"] for m in said if m["who"] == "me"] == ["anything pending?", "also check the calendar"]
+    assert a._inbox == []                                               # nothing left for a "late" next turn

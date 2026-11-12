@@ -102,6 +102,16 @@ class Agent:
             self._inbox.append({"text": text, "channel": channel, "client_id": client_id, "images": images or []})
             return True
 
+    def _drain_for_turn(self) -> list[dict[str, Any]]:
+        """The SDK runner polls this while a turn runs: messages the user sent meanwhile, announced to the other
+        clients and the activity feed here (what the API path does inline), with image blocks inflated for the model."""
+        out = self._drain_inbox()
+        for m in out:
+            m["inflated"] = [self.images.inflate(b) for b in m.get("images", [])]
+            self._emit(kind="turn", channel=m["channel"], label=m["text"][:160], msg=None)
+            self._say("me", m["text"], m["channel"], m["client_id"], images=[b["source"]["name"] for b in m.get("images", [])])
+        return out
+
     def _drain_inbox(self) -> list[dict[str, Any]]:
         with self._inbox_lock:
             out, self._inbox = self._inbox, []
@@ -301,7 +311,8 @@ class Agent:
             runner.notify = self.sdk.notify
             self.convo.set(f"sdk_session:{thread}", None)        # a worker never resumes
         try:
-            final = runner.run_turn(user_text, system_text, thread, channel, mode, on_event, images=images)
+            final = runner.run_turn(user_text, system_text, thread, channel, mode, on_event, images=images,
+                                    drain=None if isolated else self._drain_for_turn)
         except RateLimited as e:
             log.warning("agent sdk: %s; redoing the turn over the API", e)
             return None if self.api_provider is not None else f"(model error: {e})"

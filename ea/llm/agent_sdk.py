@@ -19,6 +19,7 @@ import threading
 from typing import Any, Callable
 
 from .. import config, contact
+from ..agent.conversations import MID_TURN_PREFIX
 from .base import LLMError, LLMResponse, ToolSpec
 
 log = logging.getLogger(__name__)
@@ -43,6 +44,11 @@ def _text_of(content: Any) -> str:
     if isinstance(content, list):
         return "\n".join(b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "") for b in content)
     return "" if content is None else str(content)
+
+
+def _user_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """One stream-json user message for the CLI's stdin (string content is fine, blocks let images through)."""
+    return {"type": "user", "session_id": "", "message": {"role": "user", "content": blocks}, "parent_tool_use_id": None}
 
 
 class RateLimited(LLMError):
@@ -175,14 +181,18 @@ class AgentSDKRunner:
 
     # ------------------------------------------------------------------ one turn
     def run_turn(self, user_text: str, system_text: str, thread: str, channel: str, mode: str,
-                 on_event: Callable[[dict[str, Any]], None] | None = None, images: list[dict[str, Any]] | None = None) -> str:
-        """Called from Agent.handle (a worker thread): run the turn to completion on a private event loop."""
+                 on_event: Callable[[dict[str, Any]], None] | None = None, images: list[dict[str, Any]] | None = None,
+                 drain: Callable[[], list[dict[str, Any]]] | None = None) -> str:
+        """Called from Agent.handle (a worker thread): run the turn to completion on a private event loop.
+        `drain`, when given, is polled while the turn runs and returns messages the user sent meanwhile
+        ({"text", "images" (stored blocks), "inflated" (blocks for the model)}); each is handed to the running
+        turn right away instead of waiting for it to end."""
         self._thread, self._channel = thread, channel
         result: dict[str, Any] = {}
 
         def runner() -> None:
             try:
-                result["text"] = asyncio.run(self._turn(user_text, system_text, on_event, images or []))
+                result["text"] = asyncio.run(self._turn(user_text, system_text, on_event, images or [], drain))
             except BaseException as e:  # noqa: BLE001
                 result["error"] = e
         t = threading.Thread(target=runner, name="agent-sdk-turn", daemon=True)
@@ -217,7 +227,7 @@ class AgentSDKRunner:
         )
 
     async def _turn(self, user_text: str, system_text: str, on_event: Callable[[dict[str, Any]], None] | None,
-                    images: list[dict[str, Any]] | None = None) -> str:
+                    images: list[dict[str, Any]] | None = None, drain: Callable[[], list[dict[str, Any]]] | None = None) -> str:
         from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, UserMessage, query
         from claude_agent_sdk import TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock
 
@@ -233,22 +243,30 @@ class AgentSDKRunner:
         session_id = None
         options = self._options(system_text, resume)
 
-        async def messages():
-            """Plain text: `query`. With images: content blocks through the client's streaming input, and
-            `receive_response` stops at the result (breaking out of `query` would leave its generator running)."""
-            if not images:
-                async for msg in query(prompt=user_text, options=options):
-                    yield msg
-                return
-            from claude_agent_sdk import ClaudeSDKClient
-            blocks = list(images) + [{"type": "text", "text": user_text}]
+        state = {"result_seen": False, "injected": 0}
 
-            async def one_message():
-                yield {"type": "user", "session_id": "", "message": {"role": "user", "content": blocks}, "parent_tool_use_id": None}
-            async with ClaudeSDKClient(options=options) as client:
-                await client.query(one_message())
-                async for msg in client.receive_response():
-                    yield msg
+        async def prompts():
+            """Streaming input: the user's message first, then whatever they send while the turn runs (the
+            agent's inbox, polled), each written to the CLI as a new user message that it takes into account at
+            its next step. The stream ends once a result has arrived with nothing injected after it; the SDK
+            then waits for the CLI to go idle before closing stdin (it keeps the MCP channel open for that), so
+            a message the CLI queued for a follow-up turn of its own is not cut off."""
+            yield _user_message(list(images or []) + [{"type": "text", "text": user_text}])
+            if drain is None:
+                return
+            while not state["result_seen"]:
+                await asyncio.sleep(0.25)
+                for m in drain():
+                    stored = list(m.get("images") or []) + [{"type": "text", "text": MID_TURN_PREFIX + m["text"]}]
+                    self.convo.append(self._thread, "user", stored, self._channel)
+                    state["result_seen"] = False
+                    state["injected"] += 1
+                    log.info("mid-turn message handed to the running turn: %s", m["text"][:100].replace("\n", " "))
+                    yield _user_message(list(m.get("inflated") or []) + [{"type": "text", "text": MID_TURN_PREFIX + m["text"]}])
+
+        async def messages():
+            async for msg in query(prompt=prompts(), options=options):
+                yield msg
         try:
             async for msg in messages():
                 if isinstance(msg, RateLimitEvent):
@@ -311,6 +329,7 @@ class AgentSDKRunner:
                         self.convo.append(self._thread, "user", results, self._channel)
                     continue
                 if isinstance(msg, ResultMessage):
+                    state["result_seen"] = True
                     session_id = msg.session_id
                     if msg.is_error:
                         raise LLMError(f"agent sdk: {msg.subtype}: {'; '.join(msg.errors or []) or msg.result or 'error'}")

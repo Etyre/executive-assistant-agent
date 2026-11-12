@@ -51,6 +51,12 @@ notification is what reaches Eli.
 | Eli (the LLM inbox) | message | `contact_eli` (or an `@ELI:` line) from any turn: recorded with full context, Eli notified, the task stops |
 | You | message | `send_message` from any proactive turn (scheduled check, wakeup, heartbeat); `end_conversation` per the user-level prompt |
 
+A message sent while a turn is running (`Agent.submit`, from any client) is handed to that turn rather than waiting:
+the API engine folds it into the next tool-result message; the Agent SDK engine streams its input and writes it
+to the CLI's stdin as a further user message, which Claude Code takes into account at its next step (added
+2026-11-11 after messages from the phone piled up until the turn ended). Either way it is recorded, announced to
+the other clients, and shown with the `MID_TURN_PREFIX` stripped.
+
 Every proactive turn starts with `config.WAKEUP_RULE` (read today's checklist and the running Toggl entry before
 deciding anything), prepended in `Agent.run_check`. The agent asked for this itself on 2026-11-11 so the rule does
 not depend on its memory; edit the constant, not the agent's memory, to change it.
