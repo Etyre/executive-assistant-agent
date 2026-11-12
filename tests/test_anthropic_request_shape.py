@@ -33,7 +33,7 @@ def test_request_shape(fallbacks):
     assert r.text == "hello" and r.stop_reason == "end_turn" and r.usage["input_tokens"] == 10
     b = cap["body"]
     assert b["model"] == "claude-opus-5-5" and b["max_tokens"] == 1234
-    assert b["thinking"] == {"type": "adaptive"} and "budget_tokens" not in json.dumps(b)
+    assert b["thinking"] == {"type": "adaptive", "display": "summarized"} and "budget_tokens" not in json.dumps(b)
     assert b["output_config"] == {"effort": "high"}
     assert b["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert b["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}      # history breakpoint
@@ -56,3 +56,43 @@ def test_refusal_becomes_text():
     client = anthropic.Anthropic(api_key="t", http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(handler)), max_retries=0)
     r = AnthropicProvider(fallbacks=False, client=client).complete(system=[], messages=[{"role": "user", "content": "x"}], tools=[], max_tokens=10)
     assert r.stop_reason == "refusal" and "can't help" in r.text
+
+
+def test_streaming_path_forwards_text_and_returns_the_full_message():
+    """With on_text the provider uses the SDK stream helper (same request, fallback beta included) and the
+    accumulated final message is what the agent loop gets."""
+    import types
+    seen = {}
+
+    class Block:
+        def __init__(self, **kw): self.kw = kw
+        def model_dump(self, exclude_none=True): return dict(self.kw)
+
+    class Stream:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def __iter__(self):
+            yield types.SimpleNamespace(type="content_block_start")
+            yield types.SimpleNamespace(type="text", text="hel")
+            yield types.SimpleNamespace(type="text", text="lo")
+            yield types.SimpleNamespace(type="input_json", partial_json="{}")
+        def get_final_message(self):
+            return types.SimpleNamespace(content=[Block(type="text", text="hello"), Block(type="tool_use", id="u1", name="tracker_feed", input={})],
+                                         stop_reason="tool_use", usage=types.SimpleNamespace(model_dump=lambda exclude_none=True: {"output_tokens": 2}),
+                                         model="claude-opus-5-5")
+
+    def stream(**kwargs):
+        seen.update(kwargs); return Stream()
+
+    def create(**kwargs):
+        raise AssertionError("streaming requests must not use create()")
+
+    client = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(stream=stream, create=create)),
+                                   messages=types.SimpleNamespace(stream=stream, create=create))
+    p = AnthropicProvider(model="claude-opus-5-5", effort="high", fallbacks=True, client=client)
+    pieces = []
+    r = p.complete(system=[], messages=[{"role": "user", "content": "x"}], tools=[], max_tokens=10, on_text=pieces.append)
+    assert pieces == ["hel", "lo"]
+    assert r.text == "hello" and r.stop_reason == "tool_use" and r.tool_uses[0]["name"] == "tracker_feed"
+    assert seen["betas"] == [FALLBACK_BETA] and seen["extra_body"] == {"fallbacks": "default"}
+    assert seen["thinking"] == {"type": "adaptive", "display": "summarized"} and seen["output_config"] == {"effort": "high"}

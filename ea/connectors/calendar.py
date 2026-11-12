@@ -5,6 +5,8 @@ single-day `/api/calendar`."""
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
+import logging
 import time
 from typing import Any
 
@@ -17,9 +19,13 @@ from .http import SourceError
 from .project_tracker import ProjectTracker
 
 
+log = logging.getLogger(__name__)
+
+
 class Calendar:
     def __init__(self, settings: config.Settings | None = None, tracker: ProjectTracker | None = None):
         s = settings or config.load()
+        self.timezone = s.timezone
         raw = config.secret(s.sources.calendar_ics_urls_env) or ""
         self.urls = [u.strip() for u in raw.replace("\n", ",").split(",") if u.strip()]
         self.tracker = tracker
@@ -58,10 +64,20 @@ class Calendar:
                     out.append({"date": d.isoformat(), "title": e.get("title"), "all_day": e.get("all_day"),
                                 "start": (e.get("start") or "")[11:16] or None, "end": (e.get("end") or "")[11:16] or None})
             return out
-        local_tz = dt.datetime.now().astimezone().tzinfo
+        # The configured timezone, not the Mac's: the scheduler and the agent's "today" use it, and a laptop that
+        # travels (EST on 2026-11-11) would otherwise shift every event by hours relative to them.
+        local_tz = ZoneInfo(self.timezone)
         out = []
-        for url in self.urls:
-            cal = icalendar.Calendar.from_ical(self._fetch(url))
+        self.last_errors: list[str] = []
+        for i, url in enumerate(self.urls):
+            try:
+                cal = icalendar.Calendar.from_ical(self._fetch(url))
+            except (SourceError, ValueError) as e:                     # one bad feed must not hide the others
+                self.last_errors.append(f"calendar {i + 1}: {str(e)[:160]}")
+                log.warning("calendar feed %d failed: %s", i + 1, e)
+                continue
+            # which calendar: the feed's own name (Google sets X-WR-CALNAME), else "calendar 1", "calendar 2", ...
+            calname = str(cal.get("X-WR-CALNAME", "") or "").strip() or f"calendar {i + 1}"
             for ev in recurring_ical_events.of(cal).between(start, end):
                 if str(ev.get("STATUS", "")).upper() == "CANCELLED":
                     continue
@@ -70,7 +86,7 @@ class Calendar:
                 all_day = not isinstance(s_, dt.datetime)
                 if all_day:
                     out.append({"date": s_.isoformat(), "title": str(ev.get("SUMMARY", "")).strip() or "(busy)", "all_day": True,
-                                "start": None, "end": None, "location": str(ev.get("LOCATION", "") or ""),
+                                "calendar": calname, "start": None, "end": None, "location": str(ev.get("LOCATION", "") or ""),
                                 "description": str(ev.get("DESCRIPTION", "") or "")[:300]})
                     continue
                 if s_.tzinfo is None:
@@ -79,7 +95,7 @@ class Calendar:
                     e_ = e_.replace(tzinfo=local_tz)
                 s_l, e_l = s_.astimezone(local_tz), e_.astimezone(local_tz)
                 out.append({"date": s_l.date().isoformat(), "title": str(ev.get("SUMMARY", "")).strip() or "(busy)", "all_day": False,
-                            "start": s_l.strftime("%H:%M"), "end": e_l.strftime("%H:%M"),
+                            "calendar": calname, "start": s_l.strftime("%H:%M"), "end": e_l.strftime("%H:%M"),
                             "busy": str(ev.get("TRANSP", "OPAQUE")).upper() != "TRANSPARENT",
                             "location": str(ev.get("LOCATION", "") or ""), "description": str(ev.get("DESCRIPTION", "") or "")[:300]})
         out.sort(key=lambda e: (e["date"], e["start"] or ""))

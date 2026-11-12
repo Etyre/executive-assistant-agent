@@ -22,9 +22,12 @@ class ScriptedProvider:
         self.script = list(script)
         self.calls = []
 
-    def complete(self, *, system, messages, tools, max_tokens):
+    def complete(self, *, system, messages, tools, max_tokens, on_text=None):
         self.calls.append({"system": system, "messages": copy.deepcopy(messages), "tools": tools})
-        return self.script.pop(0)
+        resp = self.script.pop(0)
+        if on_text and resp.text:                      # stream the text in two pieces like a real provider would
+            on_text(resp.text[:3]); on_text(resp.text[3:])
+        return resp
 
 
 def text(t):
@@ -196,3 +199,117 @@ def test_concurrent_turns_are_serialised(agent):
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert sorted(results) == ["one", "two"]
+
+
+def test_failed_turn_leaves_no_dangling_prompt(agent):
+    """A scheduled check whose model call fails (e.g. no API key) must not leave its prompt in the history:
+    seen 2026-11-04, when the next chat message was answered as if it were the evening check."""
+    from ea.llm.base import LLMError
+
+    class Failing:
+        name = "failing"
+
+        def __init__(self, exc):
+            self.exc = exc
+
+        def complete(self, **kw):
+            raise self.exc
+
+    thread = agent.convo.current_thread()
+    before = len(agent.convo.history(thread))
+    agent.provider = Failing(LLMError("rate limited"))
+    agent.run_check("evening", "look at things")
+    assert len(agent.convo.history(thread)) == before
+    agent.provider = Failing(TypeError("Could not resolve authentication method"))
+    import pytest
+    with pytest.raises(TypeError):
+        agent.run_check("evening", "look at things")
+    assert len(agent.convo.history(thread)) == before
+
+
+def test_streamed_turn_reports_tools_and_text_as_it_goes(agent):
+    agent.provider.script = [tool("tracker_feed", {}), text("Right now: planning block.")]
+    events = []
+    reply = agent.handle("what's on?", channel="web", on_event=events.append)
+    assert reply == "Right now: planning block."
+    assert events[0] == {"type": "tool", "name": "tracker_feed"}
+    assert "".join(e["text"] for e in events if e["type"] == "text") == reply
+    # without a listener nothing changes
+    agent.provider.script = [text("ok")]
+    assert agent.handle("thanks", channel="web") == "ok"
+
+
+def test_daily_checklist_is_read_only(agent):
+    """Eli (2026-11-04): the agent reads the daily checklist but never ticks it."""
+    assert "tracker_checklist" in agent.tools
+    assert "tracker_checklist_done" not in agent.tools
+    assert not any("checklist" in n and agent.tools._tools[n].writes for n in agent.tools.names())
+    assert not hasattr(agent.tracker, "checklist_done")
+
+
+def test_document_roots_are_listed_and_read_live(tmp_path, monkeypatch):
+    """Eli, 2026-11-06: the agent must always have the current version of his site's source docs."""
+    from ea import config
+    from ea.agent import prompt
+    from ea.tools import assistant_tools
+    from ea.tools.registry import ToolRegistry
+    from ea.agent.conversations import ConversationStore
+    config.load.cache_clear()
+    s = config.load()
+    site = tmp_path / "source_docs"; site.mkdir(); (site / "images").mkdir()
+    (site / "Sleep.md").write_text("# Sleep\nIn bed by 00:30.")
+    (site / "images" / "x.md").write_text("ignored? no, listed")
+    s.document_roots = [config.DocumentRoot(name="elityre.com", path=str(site), note="the site sources")]
+    reg = ToolRegistry()
+    store = ConversationStore(tmp_path / "s.db", tmp_path / "t")
+    assistant_tools.register(reg, store, s, lambda t: None, lambda r: None)
+    names = {d["name"] for d in json.loads(reg.dispatch("list_documents", {})[0])}
+    assert "elityre.com/Sleep.md" in names and "STANDING_INSTRUCTIONS.md" in names
+    assert reg.dispatch("read_document", {"name": "elityre.com/Sleep.md"})[0].endswith("In bed by 00:30.")
+    (site / "Sleep.md").write_text("# Sleep\nIn bed by 23:30.")                   # edited: next read sees it
+    assert reg.dispatch("read_document", {"name": "elityre.com/Sleep.md"})[0].endswith("In bed by 23:30.")
+    assert reg.dispatch("read_document", {"name": "elityre.com/../secret.md"})[0] == "outside the documents folder"
+    assert "no document" in reg.dispatch("read_document", {"name": "elityre.com/nope.md"})[0]
+    from ea.memory.store import MemoryStore
+    block = prompt.volatile_block(s, MemoryStore(tmp_path / "mem"), store, "app", "chat")
+    assert "# DOCUMENT ROOTS" in block and "elityre.com/ (2 files" in block and "the site sources" in block
+
+
+def test_message_sent_mid_turn_is_folded_into_the_running_turn(monkeypatch):
+    """Eli, 2026-11-06: sending during the agent's turn. The API engine hands it to the model at the next step; a
+    message that lands after the model finished starts the next turn on its own."""
+    from ea import config
+    from ea.agent.core import Agent
+    from ea.llm.base import LLMResponse
+    config.load.cache_clear()
+    s = config.load()
+    s.sources.otter_logseq_graph = ""
+    calls, said = [], []
+
+    class P:
+        name = "scripted"
+        def __init__(self): self.agent = None
+        def complete(self, system, messages, tools, max_tokens, **kw):
+            calls.append(messages)
+            n = len(calls)
+            if n == 1:                                   # first step: call a tool; meanwhile the user types
+                assert self.agent.submit("also, make it short", "app", "mac") is True
+                return LLMResponse(content=[{"type": "tool_use", "id": "t1", "name": "list_reminders", "input": {}}], stop_reason="tool_use")
+            if n == 2:                                   # the model finishes; the user sends again just after
+                self.agent.submit("and one more thing", "app", "mac")
+                return LLMResponse(content=[{"type": "text", "text": "first reply"}], stop_reason="end_turn")
+            return LLMResponse(content=[{"type": "text", "text": "follow-up reply"}], stop_reason="end_turn")
+    p = P()
+    a = Agent(s, provider=p); p.agent = a
+    a.on_message = said.append
+    assert a.submit("x", "app", "mac") is False                      # nothing running: the caller handles it normally
+    assert a.handle("do the thing", channel="app", client_id="mac") == "first reply"
+    # step 2 saw the tool result AND the mid-turn message in one user message
+    last_user = calls[1][-2]                                           # [-1] is the trailing volatile system message
+    assert last_user["role"] == "user" and [b["type"] for b in last_user["content"]] == ["tool_result", "text"]
+    assert "also, make it short" in last_user["content"][1]["text"]
+    # the late message started a follow-up turn of its own, and both replies went out on the live feed
+    assert len(calls) == 3 and "and one more thing" in calls[2][-2]["content"][0]["text"]
+    assert [(m["who"], m["text"]) for m in said] == [("me", "do the thing"), ("me", "also, make it short"), ("it", "first reply"),
+                                                     ("me", "and one more thing"), ("it", "follow-up reply")]
+    assert [m["text"] for m in a.convo.readable(10)][-5:] == ["do the thing", "also, make it short", "first reply", "and one more thing", "follow-up reply"]

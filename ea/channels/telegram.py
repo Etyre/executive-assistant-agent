@@ -1,4 +1,4 @@
-"""Telegram bot: the main chat channel on phone and laptop. Raw Bot API over httpx with long polling, so
+"""Telegram bot: optional legacy chat channel (the dedicated apps + push are the main one). Raw Bot API over httpx with long polling, so
 there is no inbound port to expose. Only the allow-listed user IDs are answered; everyone else is ignored.
 Voice notes are transcribed (stt.py) and handled as text."""
 from __future__ import annotations
@@ -55,7 +55,8 @@ class Telegram:
             log.info("Telegram disabled (no token)")
             return
         self._loop = asyncio.get_running_loop()
-        self.agent.outbound = self.send_sync
+        if self.agent.outbound is None:            # normally __main__ wires a fan-out (push + events + telegram)
+            self.agent.outbound = self.send_sync
         offset = None
         me = await self.http.get("/getMe")
         log.info("Telegram bot @%s polling; allowed users: %s", me.json().get("result", {}).get("username"), sorted(self.allowed) or "NONE (set channels.telegram_allowed_user_ids)")

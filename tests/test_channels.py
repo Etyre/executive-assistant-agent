@@ -16,10 +16,15 @@ class EchoAgent:
 
     def __init__(self):
         self.settings = config.load()
-        self.convo = type("C", (), {"get": lambda self, k, d=None: None, "set": lambda self, k, v: None})()
+        self.convo = type("C", (), {"get": lambda self, k, d=None: None, "set": lambda self, k, v: None,
+                                    "readable": lambda self, limit=60: [{"ts": "2026-11-04T21:29", "who": "it", "channel": "proactive", "text": "hi"}][:limit]})()
         self.router = type("R", (), {"describe": lambda self: "none"})()
 
-    def handle(self, text, channel="chat", mode="chat", store_user=True):
+    def handle(self, text, channel="chat", mode="chat", store_user=True, on_event=None, client_id="", images=None):
+        if on_event:
+            on_event({"type": "tool", "name": "tracker_feed"})
+            on_event({"type": "text", "text": f"[{channel}/{mode}] "})
+            on_event({"type": "text", "text": text})
         return f"[{channel}/{mode}] {text}"
 
 
@@ -75,3 +80,45 @@ def test_telegram_chunking():
     parts = _chunks(long, 4000)
     assert all(len(p) <= 4000 for p in parts) and "".join(p.replace("\n", "") for p in parts) == long.replace("\n", "")
     assert _chunks("", 10) == ["(empty)"]
+
+
+def test_stream_endpoint_sends_one_json_event_per_line(monkeypatch):
+    import json
+    monkeypatch.setenv("EA_WEB_TOKEN", "secret-token")
+    config.load.cache_clear()
+    c = TestClient(create_app(EchoAgent(), config.load()))
+    assert c.post("/api/message/stream", json={"text": "hi"}).status_code == 401
+    r = c.post("/api/message/stream", json={"text": "hi", "channel": "web"}, headers={"Authorization": "Bearer secret-token"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(ln) for ln in r.text.splitlines() if ln.strip()]
+    assert events[0] == {"type": "tool", "name": "tracker_feed"}
+    assert "".join(e["text"] for e in events if e["type"] == "text") == "[web/chat] hi"
+    assert events[-1] == {"type": "done", "reply": "[web/chat] hi"}
+
+
+def test_history_endpoint_is_token_protected(monkeypatch):
+    monkeypatch.setenv("EA_WEB_TOKEN", "secret-token")
+    config.load.cache_clear()
+    c = TestClient(create_app(EchoAgent(), config.load()))
+    assert c.get("/api/history").status_code == 401
+    r = c.get("/api/history?limit=5", headers={"Authorization": "Bearer secret-token"})
+    assert r.status_code == 200 and r.json()["messages"][0]["text"] == "hi"
+    assert "loadHistory" in c.get("/").text
+
+
+def test_chat_page_script_parses(monkeypatch):
+    """The page is a Python format string; one wrong escape breaks every feature of it silently (2026-11-04)."""
+    import re
+    import shutil
+    import subprocess
+    import pytest
+    monkeypatch.setenv("EA_WEB_TOKEN", "secret-token")
+    config.load.cache_clear()
+    html = TestClient(create_app(EchoAgent(), config.load())).get("/").text
+    js = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    for line in js.splitlines():                       # no string literal may contain a raw line break
+        assert line.count("'") % 2 == 0 or "//" in line, f"unbalanced quotes: {line[:80]}"
+    if not shutil.which("node"):
+        pytest.skip("node not installed; quote check only")
+    r = subprocess.run(["node", "--check", "--input-type=module", "-"], input=js, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

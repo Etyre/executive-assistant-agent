@@ -72,8 +72,9 @@ final class ChatStore {
 
     func start() async {
         guard !started else { return }
+        if !config.isConfigured { showSettings = true; return }    // not started: a setup link can call again
         started = true
-        if !config.isConfigured { showSettings = true; return }
+        showSettings = false
         await loadHistory()
         connectEvents()
         await registerDevice()
@@ -199,7 +200,12 @@ final class ChatStore {
     private func presenceChanged() {
         presenceTask?.cancel()
         let active = isChatVisible
-        if active { unread = 0 }
+        if active {
+            unread = 0
+            #if os(macOS)
+            NoticePanel.shared.clear()                // the chat is in front: the notice has done its job
+            #endif
+        }
         presenceTask = Task { [weak self] in
             while let self, self.config.isConfigured {
                 try? await self.api.reportPresence(active: active)
@@ -427,6 +433,9 @@ final class ChatStore {
     /// the app is running (always the case on the Mac, where it sits in the menu bar).
     private func notifyLocally(_ m: Message) {
         if isChatVisible { return }
+        #if os(macOS)
+        NoticePanel.shared.add(m)                     // stays on screen until clicked
+        #endif
         let c = UNMutableNotificationContent()
         c.title = agentName
         c.body = m.text.count > 400 ? String(m.text.prefix(399)) + "…" : m.text

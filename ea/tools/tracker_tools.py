@@ -115,14 +115,10 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
     def tracker_feed() -> Any:
         return tracker.feed()
 
-    @reg.tool("tracker_checklist", "Today's daily checklist (habits) with done/not-done state.")
+    @reg.tool("tracker_checklist", "Today's daily checklist (habits) with done/not-done state. Read-only: the user "
+              "ticks items themselves; you never mark one done.")
     def tracker_checklist() -> Any:
         return tracker.checklist()
-
-    @reg.tool("tracker_checklist_done", "Tick (or untick) a daily-checklist item.",
-              {"properties": {"item": {"type": "string"}, "undo": {"type": "boolean"}}, "required": ["item"]}, writes=True)
-    def tracker_checklist_done(item: str, undo: bool = False) -> Any:
-        return tracker.checklist_done(item, undo)
 
     @reg.tool("tracker_set_schedule", "Set the day's schedule in the Project Tracker block by block. Blocks are clipped to free "
               "time between calendar meetings and anything that did not fit comes back in `dropped`; meetings you leave out "

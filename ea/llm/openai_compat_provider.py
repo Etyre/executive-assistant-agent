@@ -89,7 +89,7 @@ class OpenAICompatProvider:
                                                   "parameters": t.input_schema}} for t in tools]
 
     def complete(self, *, system: list[dict[str, Any]], messages: list[dict[str, Any]],
-                 tools: list[ToolSpec], max_tokens: int) -> LLMResponse:
+                 tools: list[ToolSpec], max_tokens: int, on_text: Any = None) -> LLMResponse:
         body: dict[str, Any] = {"model": self.model, "messages": to_openai_messages(system, messages),
                                 "max_tokens": max_tokens}
         if tools:
@@ -106,4 +106,6 @@ class OpenAICompatProvider:
         resp = from_openai_message(choice.get("message") or {}, choice.get("finish_reason"))
         resp.usage = data.get("usage") or {}
         resp.model = data.get("model", self.model)
+        if on_text and resp.text:          # no token streaming for local servers yet: the text arrives in one piece
+            on_text(resp.text)
         return resp

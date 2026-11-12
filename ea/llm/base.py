@@ -7,7 +7,7 @@ swapped for a locally hosted open-weight one without touching the agent loop, to
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 
 @dataclasses.dataclass
@@ -37,7 +37,11 @@ class Provider(Protocol):
     name: str
 
     def complete(self, *, system: list[dict[str, Any]], messages: list[dict[str, Any]],
-                 tools: list[ToolSpec], max_tokens: int) -> LLMResponse: ...
+                 tools: list[ToolSpec], max_tokens: int,
+                 on_text: Callable[[str], None] | None = None) -> LLMResponse:
+        """One model call. With `on_text`, text is streamed to it as it is generated (a provider that cannot
+        stream may call it once with the whole text); the returned response is complete either way."""
+        ...
 
 
 class LLMError(RuntimeError):

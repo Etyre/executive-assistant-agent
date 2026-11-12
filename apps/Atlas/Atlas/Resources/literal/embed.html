@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Workspace</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Atlas embeds Literal's editor: no sidebar, top bar or status bar; the app provides those. */
+    #sidebar, #topbar, #statusbar { display: none !important; }
+    #app, #main { height: 100vh; }
+    #editor { height: auto; min-height: 60vh; }
+    html { font-size: 19px; }                               /* halfway between the chat size and 2x (Eli, 2026-11-06) */
+    #editor .cm-content { font-size: 19px; line-height: 1.45; padding: 18px 22px 40px; }
+    #editor .cm-scroller { overflow: visible; }
+    #diagrams { padding: 0 22px 40px; }
+    #diagrams .diagram { margin: 12px 0; padding: 12px; border: 1px solid var(--faint, #ddd); border-radius: 8px; background: var(--sidebar-bg, #fafafa); overflow-x: auto; }
+    #diagrams .diagram svg { max-width: 100%; height: auto; }
+    #diagrams .error { font: 13px/1.4 -apple-system, sans-serif; color: #c33; white-space: pre-wrap; }
+    body { overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar"><div id="sidebar-head"><span id="folder-name"></span><button id="choose-folder"></button><button id="sidebar-collapse"></button></div><ul id="file-list"></ul></aside>
+    <main id="main">
+      <div id="topbar"><button id="sidebar-handle" class="hidden"></button>
+        <div id="mode-switch"><button id="mode-rendered" class="mode active"></button><button id="mode-raw" class="mode"></button></div></div>
+      <div id="editor"></div>
+      <div id="diagrams"></div>
+      <div id="statusbar"><span id="status-left"><span id="status-dirty" class="clean"></span><span id="status-file"></span></span><span id="status-right"><span id="status-pos"></span></span></div>
+    </main>
+  </div>
+  <script>
+  // The bridge Literal's renderer expects (window.literal), backed by the Atlas app instead of Electron.
+  (function () {
+    const docs = {};                       // pseudo path -> text, set by the app
+    const post = (m) => { try { window.webkit.messageHandlers.atlas.postMessage(m); } catch (e) {} };
+    let onMenu = null, onOpenPath = null, onFileChanged = null;
+    window.literal = {
+      readFile: async (f) => docs[f] ?? '',
+      writeFile: async (f, text) => { docs[f] = text; post({ type: 'save', path: f, text }); renderDiagrams(text); },
+      listFolder: async () => ({ dirs: [], files: [] }),
+      probeFile: async () => 'text',
+      openPath: async () => {}, openInNewWindow: async () => {},
+      getState: async () => ({ raw: false, sidebarHidden: true }),
+      setState: async () => {},
+      setDirty: async (dirty, f) => post({ type: 'dirty', dirty: !!dirty, path: f }),
+      watchFile: async () => {}, reveal: async () => {},
+      openExternal: async (url) => post({ type: 'open', url }),
+      openFileDialog: async () => null, openFolderDialog: async () => null, saveAsDialog: async () => null,
+      confirmDiscard: async () => true,
+      notifySaved: () => {}, notifySaveCancelled: () => {},
+      onMenu: (cb) => { onMenu = cb; }, onOpenPath: (cb) => { onOpenPath = cb; }, onFileChanged: (cb) => { onFileChanged = cb; },
+    };
+    // Called by the app.
+    window.__atlasSetDocument = function (path, text, force) {
+      const had = path in docs;
+      docs[path] = text;
+      if (!had || force || window.__atlasCurrent !== path) { window.__atlasCurrent = path; onOpenPath && onOpenPath(path); }
+      else { onFileChanged && onFileChanged(path); }
+      renderDiagrams(text);
+    };
+    window.__atlasMenu = (cmd) => { onMenu && onMenu(cmd); };
+    window.__atlasReady = () => post({ type: 'ready' });
+
+    // ```mermaid fences are drawn below the text (mermaid.js, bundled).
+    let seq = 0;
+    async function renderDiagrams(text) {
+      const host = document.getElementById('diagrams');
+      const blocks = [...(text || '').matchAll(/```mermaid\s*\n([\s\S]*?)```/g)].map(m => m[1].trim());
+      host.innerHTML = '';
+      if (!blocks.length || !window.mermaid) return;
+      try { mermaid.initialize({ startOnLoad: false, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default', securityLevel: 'strict' }); } catch (e) {}
+      for (const src of blocks) {
+        const div = document.createElement('div'); div.className = 'diagram'; host.appendChild(div);
+        try { const { svg } = await mermaid.render('mmd' + (++seq), src); div.innerHTML = svg; }
+        catch (e) { div.innerHTML = '<div class="error">diagram error: ' + String(e.message || e).replace(/</g, '&lt;') + '</div>'; }
+      }
+    }
+    window.__atlasRenderDiagrams = renderDiagrams;
+  })();
+  </script>
+  <script src="../mermaid.min.js"></script>
+  <script src="renderer.js"></script>
+  <script>window.__atlasReady();</script>
+</body>
+</html>

@@ -4,8 +4,9 @@ Everything the agent adds or changes goes through the tracker's agent API (`/api
 projects it creates are attributed to it, context it attaches is a separate signed note, and a schedule it
 sets is pinned against the tracker's own re-planner. The agent names itself with `X-Agent-Name` and sends
 the optional bearer token (`AGENT_API_TOKEN`, Settings -> Assistant agent in the tracker). A few plain
-read/write calls that the agent API does not cover (feed, checklist, completing a task) use the app's
-ordinary API, which has no auth and is only reachable on localhost or through the bridge."""
+read/write calls that the agent API does not cover (feed, completing a task) use the app's ordinary API,
+which has no auth and is only reachable on localhost or through the bridge. The daily checklist is read-only
+for the agent: the user ticks it, so there is deliberately no write path to it here."""
 from __future__ import annotations
 
 from typing import Any
@@ -161,7 +162,3 @@ class ProjectTracker:
     def complete_task(self, tid: int, undo: bool = False) -> dict[str, Any]:
         with self._c() as c:
             return send_json(c, "POST", f"/api/tasks/{tid}/{'uncomplete' if undo else 'complete'}")
-
-    def checklist_done(self, item: str, undo: bool = False) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/checklist/done", {"item": item, "undo": undo})

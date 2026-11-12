@@ -1,0 +1,69 @@
+# xcodegen spec: `xcodegen generate` (brew install xcodegen) writes Atlas.xcodeproj. The .xcodeproj is not
+# committed; regenerate it after editing this file.
+name: Atlas
+options:
+  bundleIdPrefix: com.elityre
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    CODE_SIGN_STYLE: Automatic
+    # Pick your team in Xcode: target Atlas -> Signing & Capabilities. Or put the 10-character Team ID here.
+    DEVELOPMENT_TEAM: DW72928GK6
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  Atlas:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: Atlas
+        excludes: ["Info.plist", "Resources/**"]
+      - path: Atlas/Resources/literal
+        type: folder
+        buildPhase: resources
+      - path: Atlas/Resources/mermaid.min.js
+        buildPhase: resources
+      - path: Atlas/Resources/marked.min.js
+        buildPhase: resources
+    info:
+      path: Atlas/Info.plist
+      properties:
+        CFBundleDisplayName: Atlas
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.productivity
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIBackgroundModes: [remote-notification]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true      # http://<mac>.local:8800 on the home network; everything else is https
+        NSHumanReadableCopyright: ""
+        CFBundleURLTypes:
+          - CFBundleURLName: com.elityre.atlas
+            CFBundleURLSchemes: [atlas]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.elityre.atlas      # = channels.apns_bundle_id in the server's config.toml
+        PRODUCT_NAME: Atlas
+        ENABLE_PREVIEWS: YES
+        SWIFT_STRICT_CONCURRENCY: minimal
+        TARGETED_DEVICE_FAMILY: "1,2"
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]": Atlas/Atlas-iOS.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Atlas/Atlas-iOS.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Atlas/Atlas-macOS.entitlements
+        "ASSETCATALOG_COMPILER_APPICON_NAME": AppIcon
+        "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": AccentColor
+schemes:
+  Atlas:
+    build:
+      targets: { Atlas: all }
+    run:
+      config: Debug

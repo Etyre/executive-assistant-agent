@@ -42,3 +42,4 @@ node_modules/
 apps/Atlas/Atlas.xcodeproj/
 apps/Atlas/build/
 *.xcuserstate
+apps/Atlas/build-ios/

@@ -71,11 +71,14 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
     def exercise_days_since() -> Any:
         return exercise.days_since()
 
-    @reg.tool("calendar_events", "Calendar events (read-only) from start_date for `days` days: date, title, start/end "
+    @reg.tool("calendar_events", "Calendar events (read-only) from start_date for `days` days, across every configured "
+              "calendar (each event says which one: `calendar`): date, title, start/end "
               "(HH:MM local), all_day, location, description. Omit start_date for today; days defaults to 1, max 62.",
               {"properties": {"start_date": {"type": "string", "description": "YYYY-MM-DD"},
                               "days": {"type": "integer", "minimum": 1, "maximum": 62}}})
     def calendar_events(start_date: str | None = None, days: int = 1) -> Any:
         import datetime as dt
         start = dt.date.fromisoformat(start_date) if start_date else None
-        return calendar.events(start, days)
+        evs = calendar.events(start, days)
+        errs = getattr(calendar, "last_errors", [])
+        return {"warning": "; ".join(errs), "events": evs} if errs else evs

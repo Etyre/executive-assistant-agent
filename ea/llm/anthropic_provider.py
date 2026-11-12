@@ -7,7 +7,7 @@ classifier declining a turn is routed to another Claude model rather than surfac
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 
@@ -21,9 +21,10 @@ class AnthropicProvider:
     name = "anthropic"
 
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "high", fallbacks: bool = True,
-                 client: anthropic.Anthropic | None = None):
+                 client: anthropic.Anthropic | None = None, thinking_display: str = "summarized"):
         self.model = model
         self.effort = effort
+        self.thinking_display = thinking_display      # summarized (readable, for the chain-of-thought pane) | omitted
         self.fallbacks = fallbacks
         self.client = client or anthropic.Anthropic(max_retries=3)
 
@@ -52,18 +53,27 @@ class AnthropicProvider:
         return out
 
     def complete(self, *, system: list[dict[str, Any]], messages: list[dict[str, Any]],
-                 tools: list[ToolSpec], max_tokens: int) -> LLMResponse:
+                 tools: list[ToolSpec], max_tokens: int,
+                 on_text: Callable[[str], None] | None = None) -> LLMResponse:
         kwargs: dict[str, Any] = dict(
             model=self.model, max_tokens=max_tokens, system=system, messages=self._with_history_breakpoint(messages),
-            thinking={"type": "adaptive"}, output_config={"effort": self.effort},
+            thinking={"type": "adaptive", "display": self.thinking_display}, output_config={"effort": self.effort},
         )
         if tools:
             kwargs["tools"] = self._tools(tools)
+        if self.fallbacks:
+            kwargs.update(betas=[FALLBACK_BETA], extra_body={"fallbacks": "default"})
+        api = self.client.beta.messages if self.fallbacks else self.client.messages
         try:
-            if self.fallbacks:
-                resp = self.client.beta.messages.create(betas=[FALLBACK_BETA], extra_body={"fallbacks": "default"}, **kwargs)
+            if on_text is None:
+                resp = api.create(**kwargs)
             else:
-                resp = self.client.messages.create(**kwargs)
+                # The stream helper accumulates the full message; the caller sees text as it is generated.
+                with api.stream(**kwargs) as stream:
+                    for event in stream:
+                        if event.type == "text" and event.text:
+                            on_text(event.text)
+                    resp = stream.get_final_message()
         except anthropic.RateLimitError as e:
             raise LLMError(f"rate limited by Anthropic: {e.message}") from e
         except anthropic.APIStatusError as e:

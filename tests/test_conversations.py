@@ -44,3 +44,19 @@ def test_reminders_and_threads(tmp_path):
     assert s.current_thread() == "main"
     t = s.new_thread()
     assert t.startswith("main@") and s.current_thread() == t
+
+
+def test_readable_history_is_what_a_person_would_see(tmp_path):
+    from ea.agent.conversations import ConversationStore
+    c = ConversationStore(tmp_path / "s.db", tmp_path / "t")
+    th = c.current_thread()
+    c.append(th, "user", [{"type": "text", "text": "[scheduled check: evening]\nlook"}], "scheduler")
+    c.append(th, "assistant", [{"type": "tool_use", "id": "u1", "name": "tracker_feed", "input": {}}], "scheduler")
+    c.append(th, "user", [{"type": "tool_result", "tool_use_id": "u1", "content": "{}"}], "scheduler")
+    c.append(th, "assistant", [{"type": "text", "text": "[sent via send_message] Task 76 is due tomorrow."}], "proactive")
+    c.append(th, "user", [{"type": "text", "text": "thanks"}], "web")
+    c.append(th, "assistant", [{"type": "thinking", "thinking": ""}, {"type": "text", "text": "Any time."}], "web")
+    r = c.readable()
+    assert [(m["who"], m["text"], m["channel"]) for m in r] == [
+        ("it", "Task 76 is due tomorrow.", "proactive"), ("me", "thanks", "web"), ("it", "Any time.", "web")]
+    assert c.readable(limit=1)[0]["text"] == "Any time."

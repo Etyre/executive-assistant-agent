@@ -31,14 +31,31 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
         rid = store.add_reminder(due, text)
         return {"reminder_id": rid, "due": due.isoformat(timespec="minutes")}
 
-    @reg.tool("list_reminders", "Reminders not yet sent.")
-    def list_reminders() -> Any:
-        return [{"id": r["id"], "due": dt.datetime.fromtimestamp(r["due_ts"], tz).isoformat(timespec="minutes"), "text": r["text"]}
-                for r in store.pending_reminders()]
+    @reg.tool("schedule_wakeup", "Wake yourself up at a given local time to run a proactive turn on `prompt` (written to "
+              "yourself: what to look at and what would warrant messaging). You get all your tools; nothing reaches the user "
+              "unless that turn calls send_message. Use it for follow-ups ('did the 14:00 focus block happen?'), watches "
+              "('check whether task 76 got a plan'), or a repeating check with every_minutes. Not for plain reminders: "
+              "set_reminder sends text without a turn.",
+              {"properties": {"when": {"type": "string", "description": "ISO local datetime, e.g. 2026-11-05T15:00"},
+                              "prompt": {"type": "string", "description": "What you will do when you wake up."},
+                              "every_minutes": {"type": "integer", "minimum": 5, "description": "Repeat at this interval until cancelled (optional)."}},
+               "required": ["when", "prompt"]}, writes=True)
+    def schedule_wakeup(when: str, prompt: str, every_minutes: int | None = None) -> Any:
+        due = dt.datetime.fromisoformat(when)
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=tz)
+        rid = store.add_reminder(due, prompt, kind="wakeup", every_minutes=every_minutes)
+        return {"wakeup_id": rid, "due": due.isoformat(timespec="minutes"), "every_minutes": every_minutes}
 
-    @reg.tool("cancel_reminder", "Cancel a pending reminder.", {"properties": {"reminder_id": {"type": "integer"}}, "required": ["reminder_id"]}, writes=True)
+    @reg.tool("list_reminders", "Pending reminders (text to the user) and wakeups (your own scheduled turns), with ids.")
+    def list_reminders() -> Any:
+        return [{"id": r["id"], "kind": r.get("kind") or "message", "due": dt.datetime.fromtimestamp(r["due_ts"], tz).isoformat(timespec="minutes"),
+                 "every_minutes": r.get("every_minutes"), "text": r["text"]} for r in store.pending_reminders()]
+
+    @reg.tool("cancel_reminder", "Cancel a pending reminder or wakeup by id (repeating ones stop for good).",
+              {"properties": {"reminder_id": {"type": "integer"}}, "required": ["reminder_id"]}, writes=True)
     def cancel_reminder(reminder_id: int) -> Any:
-        return "cancelled" if store.cancel_reminder(reminder_id) else "no such pending reminder"
+        return "cancelled" if store.cancel_reminder(reminder_id) else "no such pending reminder or wakeup"
 
     @reg.tool("send_message", "Send the user a message now on the chat channel. In a normal chat turn your reply is already "
               "delivered, so this is for scheduled checks (where nothing is sent unless you call it) and for a second, "
@@ -53,21 +70,49 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
     def no_action_needed(reason: str) -> Any:
         return f"noted: {reason}"
 
-    @reg.tool("list_documents", "The instruction and habit documents available to read: standing instructions, habit "
-              "write-ups the user has shared, scheduling and exercise rules.")
-    def list_documents() -> Any:
-        out = []
-        for p in sorted(inst_dir.rglob("*.md")):
-            out.append({"name": str(p.relative_to(inst_dir)), "chars": p.stat().st_size})
+    def _roots() -> list[tuple[str, pathlib.Path, str]]:
+        """(prefix, folder, note): the instructions folder plus every configured document root."""
+        out = [("", inst_dir, "instructions and habit documents")]
+        for r in settings.document_roots:
+            out.append((r.name, pathlib.Path(r.path).expanduser(), r.note))
         return out
 
-    @reg.tool("read_document", "Read one instruction/habit document by the name list_documents gives.",
+    @reg.tool("list_documents", "The documents available to read, live from disk: the standing instructions and habit "
+              "write-ups, plus every configured document root (e.g. the Markdown sources of the user's website, "
+              "under its own prefix). Each entry has its name for read_document, size and last-modified date, so "
+              "you can see what changed recently.")
+    def list_documents() -> Any:
+        out = []
+        for prefix, folder, note in _roots():
+            if not folder.exists():
+                out.append({"root": prefix or "instructions", "error": f"folder {folder} not found"})
+                continue
+            for p in sorted(folder.rglob("*.md")):
+                if p.name.startswith(".") or p.stem == "" or "/." in str(p.relative_to(folder)):
+                    continue
+                rel = str(p.relative_to(folder))
+                st = p.stat()
+                out.append({"name": f"{prefix}/{rel}" if prefix else rel, "chars": st.st_size,
+                            "modified": dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="minutes"),
+                            **({"root": prefix, "about": note} if prefix and rel == sorted(x.relative_to(folder) for x in folder.rglob("*.md"))[0].as_posix() else {})})
+        return out
+
+    @reg.tool("read_document", "Read one document by the name list_documents gives (e.g. 'habits/x.md' or "
+              "'elityre.com/Sleep.md'). Always the current file on disk.",
               {"properties": {"name": {"type": "string"}}, "required": ["name"]})
     def read_document(name: str) -> Any:
-        p = (inst_dir / name).resolve()
-        if inst_dir.resolve() not in p.parents and p != inst_dir.resolve():
+        name = name.strip().lstrip("/")
+        folder, rel = inst_dir, name
+        for prefix, root, _note in _roots():
+            if prefix and (name == prefix or name.startswith(prefix + "/")):
+                folder, rel = root, name[len(prefix) + 1:]
+                break
+        p = (folder / rel).resolve()
+        if folder.resolve() not in p.parents and p != folder.resolve():
             return "outside the documents folder"
-        return p.read_text() if p.exists() else f"no document {name!r}"
+        if not p.exists() or not p.is_file():
+            return f"no document {name!r}; see list_documents"
+        return p.read_text(errors="replace")
 
     @reg.tool("read_transcript", "Read the conversation transcript of a day (what was said, by whom, when), to check where a "
               "memory came from or what was agreed. Large days are truncated; pass `contains` to filter lines.",
@@ -103,6 +148,14 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
             return "no user number configured (channels.twilio_allowed_callers)"
         store.set("outbound_call_message", opening)
         return twilio_voice.place_call(settings.channels.twilio_allowed_callers[0], settings)
+
+    @reg.tool("integrations_status", "The live state of every integration the user wants you to have: what each is for, "
+              "whether it works right now (ok / partial / missing / off), what it still needs (env vars, config keys, "
+              "accounts), how to obtain that, and who has to act. Use it to keep your integrations record in memory "
+              "accurate and to know what to ask the user for.")
+    def integrations_status() -> Any:
+        from .. import integrations
+        return integrations.status(settings)
 
     @reg.tool("end_conversation", "End the current conversation, as the standing instructions allow when you are unwilling "
               "to continue. Say so to the user first, in your own words, and offer the debrief. This closes the thread; "

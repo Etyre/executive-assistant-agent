@@ -10,8 +10,11 @@ def make_provider(settings: config.Settings | None = None) -> Provider:
     s = settings or config.load()
     llm = s.llm
     if llm.provider == "anthropic":
-        return AnthropicProvider(model=llm.model, effort=llm.effort, fallbacks=llm.fallbacks)
+        return AnthropicProvider(model=llm.model, effort=llm.effort, fallbacks=llm.fallbacks, thinking_display=llm.thinking_display)
     if llm.provider == "openai_compat":
         return OpenAICompatProvider(base_url=llm.openai_base_url, model=llm.model,
                                     api_key=config.secret(llm.openai_api_key_env))
-    raise ValueError(f"unknown llm.provider {llm.provider!r} (anthropic | openai_compat)")
+    if llm.provider == "agent_sdk":
+        from .agent_sdk import AgentSDKProvider
+        return AgentSDKProvider(model=llm.model, effort=llm.effort, thinking_display=llm.thinking_display)
+    raise ValueError(f"unknown llm.provider {llm.provider!r} (anthropic | openai_compat | agent_sdk)")
