@@ -151,6 +151,9 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
   a file name); put it in an `-xcconfig` file instead, which is what `build-ios.sh --no-push` does.
 - `xcrun devicectl ... install` error 4016 ("not able to fulfill the requested usage assertion") just means the
   phone is asleep or off the network; `devicectl list devices` shows it as `unavailable`. Wake it or plug it in.
+- The phone never reached the Mac after the first install (no request in the server log at all): the Info.plist
+  lacked `NSLocalNetworkUsageDescription`. On iOS 14+ a `.local` name or a private IP is "local network" use and is
+  refused silently without that key; with it the user gets a one-time prompt. Added 2026-11-11 (`project.yml`).
 - `osascript ... keystroke` is refused ("not allowed to send keystrokes", error 1002) unless the terminal has
   Accessibility permission, so a UI-level test of the Mac app cannot be scripted from Claude Code without it.
 - Anything shared between the Mac and iPhone views must compile on both; a helper left inside `#if os(macOS)` but

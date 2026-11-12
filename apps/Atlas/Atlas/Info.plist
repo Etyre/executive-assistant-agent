@@ -38,8 +38,14 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Atlas talks to the agent server running on your Mac on the same network.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
