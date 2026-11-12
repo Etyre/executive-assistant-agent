@@ -36,4 +36,6 @@ class FocusMonitor:
                 "distractions": [{"start": x.get("start"), "end": x.get("end"), "minutes": x.get("duration"), "where": x.get("where")}
                                  for x in d.get("distractions", [])][:40],
                 "toggl_entries": d.get("toggl", [])[:60],
-                "open_review_items": len(d.get("to_review") or [])}
+                # /api/day reports to_review as a COUNT, not a list; len() on it failed whenever
+                # there was anything to review (every day-detail call from 2026-11-07 on).
+                "open_review_items": int(d.get("to_review") or 0)}
