@@ -25,7 +25,10 @@ and sent when it returns. Still to do: (a) Eli opens Atlas on the phone and scan
 scoped), installed in `data/` and `data/.env`; `ea check` says `push: configured (com.elityre.atlas)`. Push to the
 phone is live as soon as the app registers a device (open it, scan the QR, allow notifications), then
 `python -m ea push-test`. Nightblock still needs `api.push.apple.com` / `api.sandbox.push.apple.com` allowed (step 3)
-for overnight pushes; (c) Tailscale (6c) for use away from home. Speech-to-text one-button entry: not built; the recipe
+for overnight pushes; (c) Tailscale: the Mac is on it since 21:50 (App Store app,
+`elis-macbook-pro.tail5a9488.ts.net`, server reachable on it); the phone needs the Tailscale app signed in to the
+same account, then the setup QR with the tailnet URL (Eli was on a coworking Wi-Fi that isolates devices, so the
+`.local` route never connected). No Funnel: nothing is public; push does not need it. Speech-to-text one-button entry: not built; the recipe
 is `ios/SHORTCUT.md` (Shortcut: Dictate Text → POST /api/message → Speak), ~3 minutes by hand in Shortcuts.
 Also 2026-11-11: every proactive turn now starts with `config.WAKEUP_RULE` (read checklist + Toggl first), at the
 agent's own request.

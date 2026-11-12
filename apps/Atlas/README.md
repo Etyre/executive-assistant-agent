@@ -73,6 +73,14 @@ the home network; away from home it needs the public URL (Tailscale Funnel, defe
 phone gets replies only while the app is open. One-button dictation into the agent is a Shortcut, not the app:
 see `../../ios/SHORTCUT.md`.
 
+**Away from home: Tailscale** (2026-11-11). The Mac runs the App Store Tailscale app (the Homebrew cask needs an
+admin password for its installer, so it could not be scripted); its tailnet name is
+`elis-macbook-pro.tail5a9488.ts.net` (100.115.15.76). The phone runs the Tailscale app signed in to the same
+account, and the Atlas server URL on the phone is `http://elis-macbook-pro.tail5a9488.ts.net:8800`, which works on
+any Wi-Fi or cellular. Nothing is exposed publicly (no Funnel). Two Info.plist pieces make this work: the ATS
+exception for `ts.net` (plain http is allowed there; the link is WireGuard-encrypted) and
+`NSLocalNetworkUsageDescription` for the `.local` fallback at home.
+
 **Offline** (Eli, 2026-11-11): the last 300 messages are cached in the app's Application Support folder
 (`Atlas/messages.json`, written 0.8 s after any change), so the chat opens with its history without a connection.
 A message sent while the server is unreachable (any `NSURLErrorDomain` error) stays on screen with a small
@@ -154,6 +162,9 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
 - The phone never reached the Mac after the first install (no request in the server log at all): the Info.plist
   lacked `NSLocalNetworkUsageDescription`. On iOS 14+ a `.local` name or a private IP is "local network" use and is
   refused silently without that key; with it the user gets a one-time prompt. Added 2026-11-11 (`project.yml`).
+- App Transport Security treats a Tailscale address (100.x or `*.ts.net`) as a remote host, so plain http to it is
+  refused unless `NSExceptionDomains` lists `ts.net` with `NSExceptionAllowsInsecureHTTPLoads`; "local networking"
+  only covers `.local` names and private ranges.
 - `osascript ... keystroke` is refused ("not allowed to send keystrokes", error 1002) unless the terminal has
   Accessibility permission, so a UI-level test of the Mac app cannot be scripted from Claude Code without it.
 - Anything shared between the Mac and iPhone views must compile on both; a helper left inside `#if os(macOS)` but

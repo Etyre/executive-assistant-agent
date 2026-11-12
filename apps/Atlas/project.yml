@@ -45,6 +45,10 @@ targets:
         UIBackgroundModes: [remote-notification]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true      # http://<mac>.local:8800 on the home network; everything else is https
+          NSExceptionDomains:                # Tailscale names are not "local" to ATS; the link is WireGuard-encrypted anyway
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         # iOS 14+: reaching a .local name or a private IP is "local network" use and is silently refused unless the
         # app declares why (then the user gets a one-time prompt). Missing this = the phone never reaches the Mac.
         NSLocalNetworkUsageDescription: Atlas talks to the agent server running on your Mac on the same network.
