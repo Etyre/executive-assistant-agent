@@ -254,6 +254,13 @@ final class ChatStore {
         let images = attachments
         guard !text.isEmpty || !images.isEmpty else { return }
         draft = ""                                   // cleared on submit; given back below if the send fails
+        #if os(iOS)
+        // The vertical-axis TextField writes its old text back into the binding right after onSubmit, so the
+        // sent message stayed in the field (Eli, 2026-11-12). Clear it once more after that write-back.
+        DispatchQueue.main.async { [weak self] in
+            if let self, self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { self.draft = "" }
+        }
+        #endif
         attachments = []
         lastError = nil
         let now = Self.nowISO()

@@ -92,6 +92,11 @@ with the push entitlement; the server still needs the APNs key before anything i
 Verified: the cache file is written on the Mac; the queue path compiles but was not exercised end to end
 (the Mac test needs Accessibility rights for scripted typing). Test on the phone: Airplane Mode, send, turn it off.
 
+**Sent text stayed in the field** (Eli, 2026-11-12): on iOS the vertical-axis `TextField` writes its old text
+back into the binding right after `onSubmit`, undoing the clear in `ChatStore.send()`. The store clears the draft
+a second time on the next main-queue pass when it still equals the sent text. The Mac composer (a `TextEditor`)
+never had this.
+
 ## Thinking pane (Mac)
 
 Beside the chat, an optional pane shows the agent's chain of thought for every turn, yours and its own
