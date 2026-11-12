@@ -79,8 +79,11 @@ def volatile_block(settings: config.Settings, memory: MemoryStore, convo: Conver
         folder = pathlib.Path(r.path).expanduser()
         files = sorted(p for p in folder.rglob("*.md") if p.stem and not p.name.startswith(".")) if folder.exists() else []
         newest = max((p.stat().st_mtime for p in files), default=0)
-        roots.append(f"- {r.name}/ ({len(files)} files" + (f", last change {dt.datetime.fromtimestamp(newest, tz):%Y-%m-%d %H:%M}" if newest else "")
-                     + f"): {r.note}" if r.note else f"- {r.name}/ ({len(files)} files)")
+        # Name the folder on disk and the files in it, so the agent can match the user's words ("source_docs",
+        # "my sleep page") to a root and a document without a tool call, and never thinks a folder is out of reach.
+        head = f"- {r.name}/ = {folder} ({len(files)} files" + (f", last change {dt.datetime.fromtimestamp(newest, tz):%Y-%m-%d %H:%M}" if newest else "") + ")"
+        names = ", ".join(p.relative_to(folder).as_posix() for p in files)
+        roots.append(head + (f": {r.note}" if r.note else "") + (f"\n  files: {names}" if names else ""))
     return (f"# NOW\n{now:%A %Y-%m-%d %H:%M} ({settings.timezone}). Channel: {channel}. Mode: {mode}.\n"
             f"Transcript days available: {', '.join(convo.recent_days(7)) or 'none yet'}.\n\n"
             f"# HABIT DOCUMENTS (read_document habits/<name>)\n" + ("\n".join(f"- {h}" for h in habits) or "- none yet") +

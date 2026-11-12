@@ -272,7 +272,7 @@ def test_document_roots_are_listed_and_read_live(tmp_path, monkeypatch):
     assert "no document" in reg.dispatch("read_document", {"name": "elityre.com/nope.md"})[0]
     from ea.memory.store import MemoryStore
     block = prompt.volatile_block(s, MemoryStore(tmp_path / "mem"), store, "app", "chat")
-    assert "# DOCUMENT ROOTS" in block and "elityre.com/ (2 files" in block and "the site sources" in block
+    assert "# DOCUMENT ROOTS" in block and f"elityre.com/ = {site} (2 files" in block and "the site sources" in block and "files: " in block
 
 
 def test_message_sent_mid_turn_is_folded_into_the_running_turn(monkeypatch):
