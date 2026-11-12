@@ -157,6 +157,13 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
 
 ## Gotchas learned
 
+- **The thread went blank after sending (Mac, 2026-11-12).** The composer and toolbar stayed, the message list
+  showed nothing. The post-turn history reload replaced the whole array (two rows dropped at the top by the
+  120-row limit, the last two re-identified with server ids) and the `LazyVStack` never laid anything out again.
+  Now the thread is a plain `VStack` (a few hundred bubbles lay out instantly) and `loadHistory` merges into the
+  rows on screen (`ChatStore.merge`): identities are kept, local rows adopt the server's id, new rows are added
+  in time order.
+
 - `xcodebuild ... -allowProvisioningUpdates` fails with "PLA Update available: You currently don't have access to
   this membership resource" whenever Apple has published a new Program License Agreement: someone has to accept it
   at developer.apple.com first. Until then the push App ID cannot be created; `build-ios.sh --no-push` still builds

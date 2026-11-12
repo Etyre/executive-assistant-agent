@@ -237,14 +237,34 @@ final class ChatStore {
         guard config.isConfigured else { return }
         do {
             let fresh = try await api.history()
-            let pending = messages.filter { $0.pending || $0.queued }
-            messages = fresh + pending
+            let before = messages.count
+            messages = merge(fresh)
             let ids = messages.map(\.id)
-            Diag.log("history: \(fresh.count) loaded, \(pending.count) pending, \(ids.count - Set(ids).count) duplicate ids")
+            Diag.log("history: \(fresh.count) loaded, \(before) on screen -> \(messages.count), \(ids.count - Set(ids).count) duplicate ids")
             lastError = nil
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Fold a history load into what is on screen instead of replacing it: rows keep their identity (the thread
+    /// went blank after a reload that dropped rows at the top and re-identified the last two, Eli 2026-11-12),
+    /// local rows take the server's id for the same text so later live events dedupe, and anything new is added
+    /// in time order. Queued and streaming rows stay as they are.
+    private func merge(_ fresh: [Message]) -> [Message] {
+        if messages.isEmpty { return fresh }
+        var out = messages
+        var known = Set(out.map(\.id))
+        for f in fresh where !known.contains(f.id) {
+            if let i = out.lastIndex(where: { $0.id.hasPrefix("local-") && !$0.queued && $0.who == f.who && $0.text == f.text }) {
+                out[i].id = f.id; out[i].ts = f.ts; out[i].images = f.images; out[i].localImages = []; out[i].pending = false
+            } else {
+                out.append(f)
+            }
+            known.insert(f.id)
+        }
+        if out.indices.dropFirst().contains(where: { out[$0 - 1].ts > out[$0].ts }) { out.sort { $0.ts < $1.ts } }
+        return out
     }
 
     // MARK: sending

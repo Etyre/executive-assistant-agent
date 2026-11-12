@@ -62,7 +62,10 @@ struct ChatView: View {
         GeometryReader { geo in
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                // A plain stack, not a lazy one: a lazy list only lays out what it thinks is visible and, after a
+                // reload changed rows near the bottom, showed nothing at all until the window was resized
+                // (Eli, 2026-11-12). A few hundred bubbles lay out instantly; the cache holds at most 300.
+                VStack(alignment: .leading, spacing: 8) {
                     if store.messages.isEmpty { emptyState }
                     ForEach(Array(store.messages.enumerated()), id: \.element.id) { i, m in
                         if i == 0 || store.messages[i - 1].day != m.day { DayStamp(day: m.day) }
