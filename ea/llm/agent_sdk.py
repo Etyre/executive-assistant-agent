@@ -307,9 +307,13 @@ class AgentSDKRunner:
                     continue
                 if isinstance(msg, StreamEvent):
                     ev = msg.event or {}
+                    if on_event and ev.get("type") == "content_block_start" and state.get("streamed") \
+                            and (ev.get("content_block") or {}).get("type") == "text":
+                        on_event({"type": "text", "text": "\n\n"})    # a new text block after tool calls: a paragraph break, as stored
                     if on_event and ev.get("type") == "content_block_delta":
                         d = ev.get("delta") or {}
                         if d.get("type") == "text_delta" and d.get("text"):
+                            state["streamed"] = True
                             on_event({"type": "text", "text": d["text"]})
                     continue
                 if isinstance(msg, AssistantMessage):

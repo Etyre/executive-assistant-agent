@@ -161,8 +161,10 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
   showed nothing. The post-turn history reload replaced the whole array (two rows dropped at the top by the
   120-row limit, the last two re-identified with server ids) and the `LazyVStack` never laid anything out again.
   Now the thread is a plain `VStack` (a few hundred bubbles lay out instantly) and `loadHistory` merges into the
-  rows on screen (`ChatStore.merge`): identities are kept, local rows adopt the server's id, new rows are added
-  in time order.
+  rows on screen (`ChatStore.merge`): the server's rows keep their ids and replace the app's own copies for the
+  span they cover (streamed, live-feed and locally sent rows, which have `local-`/`live-` ids); older cached rows
+  stay in front, queued and streaming rows at the end. A first version of the merge kept the app's copies too and
+  showed each reply twice or three times (same day).
 
 - `xcodebuild ... -allowProvisioningUpdates` fails with "PLA Update available: You currently don't have access to
   this membership resource" whenever Apple has published a new Program License Agreement: someone has to accept it

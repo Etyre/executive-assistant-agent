@@ -247,24 +247,16 @@ final class ChatStore {
         }
     }
 
-    /// Fold a history load into what is on screen instead of replacing it: rows keep their identity (the thread
-    /// went blank after a reload that dropped rows at the top and re-identified the last two, Eli 2026-11-12),
-    /// local rows take the server's id for the same text so later live events dedupe, and anything new is added
-    /// in time order. Queued and streaming rows stay as they are.
+    /// Fold a history load into what is on screen instead of replacing it. The server's rows are the truth for
+    /// the span they cover: they keep their ids (so nothing is re-laid-out), and they replace the rows the app
+    /// made itself for that span (streamed replies, live-feed rows, our own sent messages), which otherwise
+    /// showed up twice next to their stored copies (Eli, 2026-11-12). Rows older than the load keeps (the cache
+    /// beyond the server's limit) stay in front; queued and streaming rows stay at the end.
     private func merge(_ fresh: [Message]) -> [Message] {
-        if messages.isEmpty { return fresh }
-        var out = messages
-        var known = Set(out.map(\.id))
-        for f in fresh where !known.contains(f.id) {
-            if let i = out.lastIndex(where: { $0.id.hasPrefix("local-") && !$0.queued && $0.who == f.who && $0.text == f.text }) {
-                out[i].id = f.id; out[i].ts = f.ts; out[i].images = f.images; out[i].localImages = []; out[i].pending = false
-            } else {
-                out.append(f)
-            }
-            known.insert(f.id)
-        }
-        if out.indices.dropFirst().contains(where: { out[$0 - 1].ts > out[$0].ts }) { out.sort { $0.ts < $1.ts } }
-        return out
+        let waiting = messages.filter { $0.pending || $0.queued }
+        guard let first = fresh.first else { return waiting }
+        let older = messages.filter { !$0.pending && !$0.queued && $0.id.hasPrefix("db-") && $0.ts < first.ts }
+        return older + fresh + waiting
     }
 
     // MARK: sending
