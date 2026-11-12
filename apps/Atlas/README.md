@@ -78,7 +78,8 @@ see `../../ios/SHORTCUT.md`.
 A message sent while the server is unreachable (any `NSURLErrorDomain` error) stays on screen with a small
 "waiting for a connection" label and is sent, in order, when the live feed reconnects, the app comes to the
 foreground, or a 30 s timer fires; the reply then streams in as usual. Server-side errors (HTTP 4xx/5xx) are not
-queued; they show as errors as before. Installed on Eli's iPhone 16e on 2026-11-11 (`build-ios.sh --no-push`).
+queued; they show as errors as before. Installed on Eli's iPhone 16e on 2026-11-11, first with `--no-push`, then (after the PLA was accepted) the full build
+with the push entitlement; the server still needs the APNs key before anything is delivered.
 Verified: the cache file is written on the Mac; the queue path compiles but was not exercised end to end
 (the Mac test needs Accessibility rights for scripted typing). Test on the phone: Airplane Mode, send, turn it off.
 
