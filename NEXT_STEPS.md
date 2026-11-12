@@ -16,13 +16,16 @@ the shared workspace/documents with Literal's editor and Mermaid diagrams, the t
 
 **iPhone app (2026-11-11, Eli: "Let's install it on my iPhone"):** the Mac already has a *paid* Apple Developer
 team (DW72928GK6, the one the Flutter apps deploy with), so no enrollment wait. `apps/Atlas/build-ios.sh --no-push`
-builds the iPhone app signed with that team (verified 2026-11-11). Two things only Eli can do remain:
-(a) wake/plug in the phone so `devicectl` can install (it was "unavailable" at the time); (b) agree to the updated
-Program License Agreement at developer.apple.com (Xcode refused "PLA Update available"), after which
-`build-ios.sh` without `--no-push` registers the push App ID, and an APNs key (step 6) turns push on. First launch
-on the phone: scan the setup QR (`atlas://setup?url=…&token=…`, generated into the session scratchpad) with the
-Camera app; nothing to type. Home Wi-Fi only until Tailscale (6c). Speech-to-text one-button entry: not built
-yet; the recipe is `ios/SHORTCUT.md` (Shortcut: Dictate Text → POST /api/message → Speak), ~3 minutes by hand.
+builds the iPhone app signed with that team, and it is INSTALLED on the iPhone 16e (21:05, over the cable).
+Offline support built the same evening: history cached in the app, messages typed without a connection queued
+and sent when it returns. Still to do: (a) Eli opens Atlas on the phone and scans the setup QR
+(`atlas://setup?url=…&token=…`; regenerate with any QR tool from `EA_WEB_TOKEN` and `http://Elis-MacBook-Pro-2.local:8800`);
+(b) Eli agrees to the updated Program License Agreement at developer.apple.com (Xcode refused "PLA Update
+available"), after which `build-ios.sh` without `--no-push` registers the push App ID, and an APNs key (step 6)
+turns push on; (c) Tailscale (6c) for use away from home. Speech-to-text one-button entry: not built; the recipe
+is `ios/SHORTCUT.md` (Shortcut: Dictate Text → POST /api/message → Speak), ~3 minutes by hand in Shortcuts.
+Also 2026-11-11: every proactive turn now starts with `config.WAKEUP_RULE` (read checklist + Toggl first), at the
+agent's own request.
 
 ## Stage 1: talking to it on this Mac (about 15 minutes, no cloud)
 

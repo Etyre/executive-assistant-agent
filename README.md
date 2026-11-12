@@ -51,6 +51,10 @@ notification is what reaches Eli.
 | Eli (the LLM inbox) | message | `contact_eli` (or an `@ELI:` line) from any turn: recorded with full context, Eli notified, the task stops |
 | You | message | `send_message` from any proactive turn (scheduled check, wakeup, heartbeat); `end_conversation` per the user-level prompt |
 
+Every proactive turn starts with `config.WAKEUP_RULE` (read today's checklist and the running Toggl entry before
+deciding anything), prepended in `Agent.run_check`. The agent asked for this itself on 2026-11-11 so the rule does
+not depend on its memory; edit the constant, not the agent's memory, to change it.
+
 The standing instructions and user-level system prompt are the Markdown files in `instructions/`; edit
 them and the next turn uses the new text. Drop one file per habit into `instructions/habits/` (see the
 README and example there) and the scheduled checks compare the data against them.

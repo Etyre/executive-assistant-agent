@@ -2,14 +2,15 @@
 import Foundation
 import os
 
-struct Message: Identifiable, Hashable {
-    enum Who: String { case me, it }
+struct Message: Identifiable, Hashable, Codable {
+    enum Who: String, Codable { case me, it }
     var id: String
     var who: Who
     var text: String
     var ts: String           // ISO-8601 local, as the server sends it
     var channel: String
     var pending = false      // being streamed right now
+    var queued = false       // typed while the server was unreachable; sent automatically once it is back
     var images: [String] = []        // names served by /api/images/<name>
     var localImages: [Data] = []     // what we attached ourselves, before the server names come back
 

@@ -39,7 +39,7 @@ struct ChatView: View {
         #if os(macOS)
         .onAppear { store.windowShowing = true }
         .onDisappear { store.windowShowing = false }
-        .onChange(of: phase) { _, p in if p == .active { Task { await store.loadHistory() } } }
+        .onChange(of: phase) { _, p in if p == .active { Task { await store.loadHistory(); store.flushOutbox() } } }
         #else
         .onAppear { store.isChatVisible = true }
         .onDisappear { store.isChatVisible = false }
@@ -255,6 +255,9 @@ struct MessageBubble: View {
                             Text(message.text)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
+                        }
+                        if message.queued {
+                            Label("waiting for a connection", systemImage: "clock").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                     .frame(maxWidth: maxWidth - 28, alignment: .leading)

@@ -14,13 +14,17 @@ final class ChatStore {
     static let shared = ChatStore()
 
     let config = AppConfig.shared
-    var messages: [Message] = []
+    /// Every change is written to a local cache (debounced), so the chat opens with its history offline and a
+    /// message typed without a connection survives a relaunch until it is sent (Eli, 2026-11-11).
+    var messages: [Message] = [] { didSet { cacheDirty() } }
     /// The unsent message survives a restart (Eli, 2026-11-06).
     var attachments: [API.Attachment] = []    // images pasted or dropped, waiting to be sent with the next message
     var draft: String = UserDefaults.standard.string(forKey: "draft") ?? "" {
         didSet { if draft != oldValue { UserDefaults.standard.set(draft, forKey: "draft") } }
     }
     var isSending = false
+    private var flushTimer: Task<Void, Never>?
+    private var cacheSave: Task<Void, Never>?
     var activity = ""                 // "looking at the Project Tracker…" while the agent works
     var lastError: String?
     var connection: Connection = .off
@@ -75,7 +79,9 @@ final class ChatStore {
         if !config.isConfigured { showSettings = true; return }    // not started: a setup link can call again
         started = true
         showSettings = false
+        loadCache()
         await loadHistory()
+        flushOutbox()
         connectEvents()
         await registerDevice()
         observeActivation()
@@ -231,7 +237,7 @@ final class ChatStore {
         guard config.isConfigured else { return }
         do {
             let fresh = try await api.history()
-            let pending = messages.filter(\.pending)
+            let pending = messages.filter { $0.pending || $0.queued }
             messages = fresh + pending
             let ids = messages.map(\.id)
             Diag.log("history: \(fresh.count) loaded, \(pending.count) pending, \(ids.count - Set(ids).count) duplicate ids")
@@ -251,7 +257,8 @@ final class ChatStore {
         attachments = []
         lastError = nil
         let now = Self.nowISO()
-        messages.append(Message(id: "local-me-\(UUID().uuidString)", who: .me, text: text, ts: now, channel: "app", localImages: images.map(\.data)))
+        let meID = "local-me-\(UUID().uuidString)"
+        messages.append(Message(id: meID, who: .me, text: text, ts: now, channel: "app", localImages: images.map(\.data)))
         if isSending {
             // The agent is mid-turn: hand the message over now; the running turn folds it in (or it starts the
             // next turn) and the reply arrives on the live feed (Eli, 2026-11-06).
@@ -259,15 +266,24 @@ final class ChatStore {
                 do {
                     let r = try await api.sendNow(text, images: images)
                     activity = r.queued ? "the agent will see your message in its current turn" : activity
-                } catch { lastError = error.localizedDescription; if draft.isEmpty { draft = text } }
+                } catch {
+                    if Self.isOffline(error) { markQueued(meID) } else { lastError = error.localizedDescription; if draft.isEmpty { draft = text } }
+                }
             }
             return
         }
+        transmit(meID: meID, text: text, images: images)
+    }
+
+    /// One request/reply exchange for a message already on screen. Unreachable server: the message is kept as
+    /// `queued` and goes out from `flushOutbox()` when the connection is back; nothing is lost and nothing is retyped.
+    private func transmit(meID: String, text: String, images: [API.Attachment]) {
         isSending = true
         let replyID = "local-it-\(UUID().uuidString)"
-        messages.append(Message(id: replyID, who: .it, text: "", ts: now, channel: "app", pending: true))
+        messages.append(Message(id: replyID, who: .it, text: "", ts: Self.nowISO(), channel: "app", pending: true))
         Task {
             var got = ""
+            var offline = false
             do {
                 for try await ev in api.send(text, images: images) {
                     switch ev {
@@ -285,14 +301,77 @@ final class ChatStore {
                     }
                 }
             } catch {
-                update(replyID, text: (got.isEmpty ? "" : got + "\n\n") + "error: \(error.localizedDescription)", pending: false)
-                lastError = error.localizedDescription
-                if got.isEmpty && draft.isEmpty { draft = text }    // the server never got it: keep the draft
+                if got.isEmpty && Self.isOffline(error) {
+                    offline = true
+                    messages.removeAll { $0.id == replyID }
+                    markQueued(meID)
+                } else {
+                    update(replyID, text: (got.isEmpty ? "" : got + "\n\n") + "error: \(error.localizedDescription)", pending: false)
+                    lastError = error.localizedDescription
+                }
             }
             activity = ""
             isSending = false
-            await loadHistory()               // swap the local ids for the server's, so later events dedupe
+            if offline {
+                lastError = "no connection to the server: your message is saved and will be sent when it is back"
+            } else {
+                await loadHistory()               // swap the local ids for the server's, so later events dedupe
+                flushOutbox()
+            }
         }
+    }
+
+    // MARK: offline outbox and local cache
+
+    private static func isOffline(_ error: Error) -> Bool {
+        (error as NSError).domain == NSURLErrorDomain
+    }
+
+    private func markQueued(_ id: String) {
+        if let i = messages.firstIndex(where: { $0.id == id }) { messages[i].queued = true }
+        Diag.log("outbox: queued \(messages.filter(\.queued).count)")
+        if flushTimer == nil {
+            flushTimer = Task { [weak self] in
+                while let self, !Task.isCancelled, self.messages.contains(where: \.queued) {
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    self.flushOutbox()
+                }
+                self?.flushTimer = nil
+            }
+        }
+    }
+
+    /// Send the oldest queued message; the exchange's completion calls back here for the next one.
+    func flushOutbox() {
+        guard !isSending, config.isConfigured, let m = messages.first(where: \.queued) else { return }
+        guard let i = messages.firstIndex(where: { $0.id == m.id }) else { return }
+        messages[i].queued = false
+        Diag.log("outbox: sending \(m.id)")
+        let images = m.localImages.map { API.Attachment(data: $0, mediaType: $0.starts(with: [0xFF, 0xD8]) ? "image/jpeg" : "image/png") }
+        transmit(meID: m.id, text: m.text, images: images)
+    }
+
+    private static var cacheURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Atlas")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("messages.json")
+    }
+
+    private func cacheDirty() {
+        cacheSave?.cancel()
+        cacheSave = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard let self, !Task.isCancelled else { return }
+            let keep = Array(self.messages.filter { !$0.pending }.suffix(300))
+            if let data = try? JSONEncoder().encode(keep) { try? data.write(to: Self.cacheURL, options: .atomic) }
+        }
+    }
+
+    private func loadCache() {
+        guard messages.isEmpty, let data = try? Data(contentsOf: Self.cacheURL),
+              let cached = try? JSONDecoder().decode([Message].self, from: data) else { return }
+        messages = cached
+        Diag.log("cache: \(cached.count) messages, \(cached.filter(\.queued).count) queued")
     }
 
     private func update(_ id: String, text: String, pending: Bool? = nil) {
@@ -385,7 +464,7 @@ final class ChatStore {
             Diag.log("events: live")
             if let a = e["agent"] as? String { agentName = a }
             workers = (e["workers"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
-            Task { await loadHistory(); if showActivity { await loadActivity() } }   // catch up on what we missed
+            Task { await loadHistory(); flushOutbox(); if showActivity { await loadActivity() } }   // catch up, then send what waited
         case "message":
             guard let text = e["text"] as? String, let who = (e["who"] as? String).flatMap(Message.Who.init) else { return }
             if who == .me && (e["client_id"] as? String) == config.clientID { return }     // typed here; already on screen

@@ -73,6 +73,15 @@ the home network; away from home it needs the public URL (Tailscale Funnel, defe
 phone gets replies only while the app is open. One-button dictation into the agent is a Shortcut, not the app:
 see `../../ios/SHORTCUT.md`.
 
+**Offline** (Eli, 2026-11-11): the last 300 messages are cached in the app's Application Support folder
+(`Atlas/messages.json`, written 0.8 s after any change), so the chat opens with its history without a connection.
+A message sent while the server is unreachable (any `NSURLErrorDomain` error) stays on screen with a small
+"waiting for a connection" label and is sent, in order, when the live feed reconnects, the app comes to the
+foreground, or a 30 s timer fires; the reply then streams in as usual. Server-side errors (HTTP 4xx/5xx) are not
+queued; they show as errors as before. Installed on Eli's iPhone 16e on 2026-11-11 (`build-ios.sh --no-push`).
+Verified: the cache file is written on the Mac; the queue path compiles but was not exercised end to end
+(the Mac test needs Accessibility rights for scripted typing). Test on the phone: Airplane Mode, send, turn it off.
+
 ## Thinking pane (Mac)
 
 Beside the chat, an optional pane shows the agent's chain of thought for every turn, yours and its own
@@ -141,6 +150,8 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
   a file name); put it in an `-xcconfig` file instead, which is what `build-ios.sh --no-push` does.
 - `xcrun devicectl ... install` error 4016 ("not able to fulfill the requested usage assertion") just means the
   phone is asleep or off the network; `devicectl list devices` shows it as `unavailable`. Wake it or plug it in.
+- `osascript ... keystroke` is refused ("not allowed to send keystrokes", error 1002) unless the terminal has
+  Accessibility permission, so a UI-level test of the Mac app cannot be scripted from Claude Code without it.
 - Anything shared between the Mac and iPhone views must compile on both; a helper left inside `#if os(macOS)` but
   used outside it (`attachmentStrip`, 2026-11-11) only shows up when the iOS build runs. Build both before
   calling a UI change done.

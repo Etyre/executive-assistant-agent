@@ -136,6 +136,12 @@ remember or follow up on) and act on it with the tracker and memory tools; note 
 worth keeping; message the user only if something is time-sensitive or needs their decision, otherwise
 no_action_needed. The transcript is below; otter_transcript gives the rest if it is cut off."""
 
+# Prepended to every proactive turn (scheduled checks, heartbeats, self-set wakeups, new recordings, document
+# changes). Asked for by the agent itself on 2026-11-11 so the rule does not depend on its memory.
+WAKEUP_RULE = """Before deciding anything on this wake-up, read today's checklist (tracker_checklist) and the running Toggl entry
+(toggl_current). Use them to see what the user is doing right now so you do not interrupt, to catch anchors that
+are still doable today, and to re-plan the day when it has slipped. Reading more does not mean messaging more."""
+
 HEARTBEAT_PROMPT = """Unscheduled check-in: you woke up on your own, as you do at random intervals of about an hour during the
 day. Decide what, if anything, is worth a look right now given the time of day, the recent conversation, pending
 reminders and wakeups, and the habit documents: the running Toggl entry and today's focus so far, the tracker's

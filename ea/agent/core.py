@@ -129,7 +129,7 @@ class Agent:
     def run_check(self, name: str, check_prompt: str, kind: str = "scheduled check") -> str | None:
         """A proactive turn: a configured check, a wakeup the agent scheduled for itself, or a random heartbeat.
         Returns the final text (not sent unless the model used send_message)."""
-        text = f"[{kind}: {name}]\n{check_prompt}"
+        text = f"[{kind}: {name}]\n{config.WAKEUP_RULE}\n\n{check_prompt}"
         return self.handle(text, channel="scheduler", mode="proactive", store_user=True)
 
     # ------------------------------------------------------------------ main entry
