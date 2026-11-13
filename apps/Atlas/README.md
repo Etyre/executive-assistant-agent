@@ -124,6 +124,8 @@ until the chat comes to the front on its own. The system notification is still p
 those as banners that fade unless you set Atlas to "Alerts" in System Settings → Notifications. Clicking a
 system notification also opens the chat, creating the window if it was closed (via the `atlas://open` URL).
 
+The notice has an x in its corner (2026-11-12): it dismisses the notice without opening the chat; the messages stay unread in the thread.
+
 ## Images
 
 Paste an image (⌘V) or drag image files or images onto the chat; they appear as thumbnails above the composer and

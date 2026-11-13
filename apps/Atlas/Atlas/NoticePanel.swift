@@ -1,7 +1,7 @@
 // A persistent notice: a small floating panel at the top-right of the screen listing the agent's unread messages.
-// It stays until you click it (which opens or activates the chat) or until the chat comes to the front. This is the
-// app's own, so it does not depend on System Settings' banner style (Eli, 2026-11-07: "notifications should stay
-// until I click on them").
+// It stays until you click it (which opens or activates the chat), close it with its x (which just dismisses it,
+// Eli 2026-11-12), or until the chat comes to the front. This is the app's own, so it does not depend on System
+// Settings' banner style (Eli, 2026-11-07: "notifications should stay until I click on them").
 #if os(macOS)
 import SwiftUI
 import AppKit
@@ -26,10 +26,13 @@ final class NoticePanel {
 
     private func show() {
         let p = panel ?? makePanel()
-        p.contentView = NSHostingView(rootView: NoticeView(items: items) { [weak self] in
+        p.contentView = NSHostingView(rootView: NoticeView(items: items, onOpen: { [weak self] in
             self?.clear()
             AppDelegate.openChat()
-        })
+        }, onDismiss: { [weak self] in
+            Diag.log("notice: dismissed")
+            self?.clear()
+        }))
         p.setContentSize(p.contentView!.fittingSize)
         // On the screen the mouse is on (where the user is looking), not whichever holds the key window.
         let mouse = NSEvent.mouseLocation
@@ -59,6 +62,7 @@ final class NoticePanel {
 struct NoticeView: View {
     let items: [Message]
     let onOpen: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -67,6 +71,11 @@ struct NoticeView: View {
                 Text("Atlas").font(.headline)
                 Spacer()
                 Text("\(items.count)").font(.caption).foregroundStyle(.secondary)
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 15)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss (the messages stay in the chat)")
             }
             ForEach(items.suffix(3)) { m in
                 Text(m.text).font(.callout).lineLimit(4).fixedSize(horizontal: false, vertical: true)
