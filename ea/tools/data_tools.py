@@ -22,7 +22,7 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
 
     @reg.tool("toggl_current", "The Toggl time entry running right now (what the user says they are doing), or null.")
     def toggl_current() -> Any:
-        return toggl.current()
+        return toggl.current() or {"running": False}      # None rendered as a bare "ok" (Atlas, 2026-11-12)
 
     @reg.tool("toggl_entries", "Toggl time entries for the last N days (max 90): description, project, tags, start/stop, minutes.",
               {"properties": {"days": DAYS}, "required": ["days"]})

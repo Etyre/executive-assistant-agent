@@ -27,13 +27,15 @@ class FocusMonitor:
         """A day's focus spans and distractions, trimmed to what an assistant needs."""
         with self.router.client("focus") as c:
             d = get_json(c, "/api/day", day=day)
-        spans = [{"start": s.get("start"), "end": s.get("end"), "minutes": s.get("duration"),
+        # /api/day durations are seconds (a 852 s distraction showed as "minutes": 852, Atlas 2026-11-12)
+        mins = lambda sec: round(sec / 60, 1) if isinstance(sec, (int, float)) else sec
+        spans = [{"start": s.get("start"), "end": s.get("end"), "minutes": mins(s.get("duration")),
                   "focused_min": s.get("focus_min"), "ended_by": s.get("ended_by"), "title": s.get("title"),
                   "summary": s.get("summary"), "detours": s.get("detours"), "fully_absorbed": s.get("fully_absorbed"),
                   "toggl": s.get("toggl")} for s in d.get("focus_spans", [])]
         return {"day": d.get("day"), "metrics": {k: d.get("metrics", {}).get(k) for k in METRIC_KEYS},
                 "focus_spans": spans,
-                "distractions": [{"start": x.get("start"), "end": x.get("end"), "minutes": x.get("duration"), "where": x.get("where")}
+                "distractions": [{"start": x.get("start"), "end": x.get("end"), "minutes": mins(x.get("duration")), "where": x.get("where")}
                                  for x in d.get("distractions", [])][:40],
                 "toggl_entries": d.get("toggl", [])[:60],
                 # /api/day reports to_review as a COUNT, not a list; len() on it failed whenever

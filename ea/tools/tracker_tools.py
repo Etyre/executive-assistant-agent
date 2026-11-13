@@ -7,7 +7,7 @@ from typing import Any
 from .. import config
 from ..connectors.http import SourceError
 from ..connectors.http import ServiceRouter
-from ..connectors.project_tracker import SCHEDULE_KINDS, ProjectTracker
+from ..connectors.project_tracker import SCHEDULE_KINDS, ProjectTracker, compact_checklist
 from .registry import ToolRegistry
 
 HM = {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$", "description": "HH:MM, 24h local time"}
@@ -146,11 +146,21 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
     def tracker_feed() -> Any:
         return tracker.feed()
 
-    @reg.tool("tracker_checklist", "Today's daily checklist (habits) with done/not-done state. Read-only: the user "
-              "ticks items themselves; you never mark one done.")
+    @reg.tool("tracker_checklist", "Today's daily checklist (habits), compact: per row its name, steps_to_yellow (N), "
+              "markers, today's value, last_true (last date met), misses (consecutive days through yesterday not met) "
+              "and colour (green under N misses, yellow at N, orange at 2N, red at 3N). `days` adds the raw values of "
+              "the last N dates; `full` returns the whole sheet (every date column; large). Read-only: the user ticks "
+              "it himself, never you.",
+              {"properties": {"days": {"type": "integer", "minimum": 0, "maximum": 92}, "full": {"type": "boolean"}}})
     @guard
-    def tracker_checklist() -> Any:
-        return tracker.checklist()
+    def tracker_checklist(days: int = 0, full: bool = False) -> Any:
+        raw = tracker.checklist()
+        if full:
+            return raw
+        from zoneinfo import ZoneInfo
+        import datetime as _dt
+        tz = ZoneInfo((settings or config.load()).timezone)
+        return compact_checklist(raw, _dt.datetime.now(tz).date(), days=days)
 
     @reg.tool("tracker_set_schedule", "Set the day's schedule in the Project Tracker block by block. Blocks are clipped to free "
               "time between calendar meetings and anything that did not fit comes back in `dropped`; meetings you leave out "

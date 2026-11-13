@@ -9,6 +9,7 @@ which has no auth and is only reachable on localhost or through the bridge. The 
 for the agent: the user ticks it, so there is deliberately no write path to it here."""
 from __future__ import annotations
 
+import datetime as dt
 import pathlib
 import subprocess
 import time
@@ -134,6 +135,51 @@ class ProjectTracker:
     def checklist(self) -> dict[str, Any]:
         with self._c() as c:
             return get_json(c, "/api/checklist")
+
+
+MARKERS = {"Paused at workshops": "paused_at_workshops", "Covered when overwelmed": "covered_when_overwhelmed", "dimmed": "dimmed"}
+
+
+def compact_checklist(raw: dict[str, Any], today: dt.date, days: int = 0) -> dict[str, Any]:
+    """The checklist sheet boiled down for the model: the full sheet carries every date column of the quarter
+    (about 50 KB, more than the Agent SDK passes back as a tool result; Atlas, 2026-11-12). Per row: the name,
+    its colour rule (steps_to_yellow = N: yellow at N consecutive misses, orange at 2N, red at 3N), the markers,
+    today's value, the last date it was met, the current run of misses through yesterday, and the colour. A miss
+    is a day whose value is not the row's "Value for green" (true unless the sheet says otherwise). `days` adds
+    the raw values of the last `days` dates."""
+    out = []
+    for it in raw.get("items", []):
+        f = it.get("fields") or {}
+        green = f.get("Value for green", True)
+        dated = sorted((k, v) for k, v in f.items() if len(k) == 10 and k[:4].isdigit())
+        past = [(k, v) for k, v in dated if k < today.isoformat()]
+        row: dict[str, Any] = {"item": it.get("item"), "checkable": it.get("checkable"), "computed": it.get("computed")}
+        n = f.get("steps to Yellow")
+        if isinstance(n, int) and n > 0:
+            row["steps_to_yellow"] = n
+        if green is not True:
+            row["value_for_green"] = green
+        markers = [name for col, name in MARKERS.items() if f.get(col) not in (None, "", False, 0)]
+        if markers:
+            row["markers"] = markers
+        row["today"] = f.get(today.isoformat()) if it.get("checkable") else None
+        hits = [k for k, v in dated if v == green and k <= today.isoformat()]
+        row["last_true"] = hits[-1] if hits else None
+        misses = 0
+        for k, v in reversed(past):
+            if v == green:
+                break
+            misses += 1
+        row["misses"] = misses
+        if "steps_to_yellow" in row:
+            row["colour"] = "red" if misses >= 3 * n else "orange" if misses >= 2 * n else "yellow" if misses >= n else "green"
+        if days > 0:
+            row["recent"] = {k: v for k, v in dated if k <= today.isoformat()}
+            row["recent"] = dict(list(row["recent"].items())[-days:])
+        out.append(row)
+    return {"source": raw.get("source"), "today": today.isoformat(), "rows": out,
+            "legend": "misses = consecutive days through yesterday not meeting the row; colour from steps_to_yellow N: "
+                      "yellow at N, orange at 2N, red at 3N"}
 
     def notes(self, task_id: int | None = None, project_id: int | None = None) -> list[dict[str, Any]]:
         with self._c() as c:
