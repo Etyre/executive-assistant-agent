@@ -53,6 +53,8 @@ class LLMSettings:
     max_tokens: int = 16000
     fallbacks: bool = True                    # Anthropic server-side refusal fallbacks (beta)
     thinking_display: str = "summarized"      # summarized: readable reasoning in the app's thinking pane | omitted
+    fast_when_chatting: bool = True           # fast mode (premium-priced) on turns where the user is waiting for the reply
+                                              # (chat, voice); never on checks, wakeups, heartbeats, ingestion or workers
     # agent_sdk only:
     billing: str = "subscription"             # subscription (the Claude Code login) | api (the ANTHROPIC_API_KEY)
     api_fallback: bool = True                 # when the subscription window is nearly used up, run turns over the API

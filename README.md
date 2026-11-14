@@ -94,6 +94,27 @@ to turn that off. To swap in an open-weight model served by Ollama / vLLM / LM S
 is kept in Anthropic's content-block shape and translated at the provider edge, so a switch mid-life keeps
 all memory and history.
 
+### Fast mode: only while you are waiting
+
+Fast mode (the same model at up to ~2.5x the output speed, at twice the price) is on when, and only when, the
+turn is a synchronous conversation with you: `mode` `chat` (apps, web page, Shortcut, Telegram, `ea chat`) or
+`voice` (a phone call). Everything the agent does on its own runs at standard speed: scheduled checks, wakeups,
+heartbeats, Otter and document-change ingestion, `ea run` tasks, worker results and the workers themselves. The
+decision is one line in `Agent._handle` (`ea/agent/core.py`); `llm.fast_when_chatting = false` turns it off.
+
+- **Agent SDK engine**: each turn passes `{"fastMode": true|false}` to the CLI as flag settings
+  (`AgentSDKRunner._options`), the only layer the CLI accepts it from under the SDK. The log line
+  `agent sdk turn: fast mode on|off` is what the CLI reported for the turn. A message you send in the middle of
+  a background turn does not speed that turn up (the mode is fixed when the CLI starts); the reply to it does.
+- **API engine / fallback**: `speed="fast"` on each model call of the turn (`AnthropicProvider.complete(fast=True)`);
+  a background turn switches to fast from the moment a message from you is folded into it. A 429 from fast
+  mode's own rate limit is redone once at standard speed.
+- **Cost on the subscription**: fast mode is not part of the plan; it is paid from the account's *extra usage*
+  credits (claude.ai → Settings → Usage). With no credits left the CLI still says "on" but serves standard
+  speed and the log says `fast mode not served this turn: Fast mode disabled · usage credit limit reached`.
+- Chat and background turns share one session, and a change of speed cannot reuse the other speed's prompt
+  cache, so the first turn after each switch re-reads the conversation uncached (slower to start, dearer).
+
 ### Parallel workers
 
 The conversation with the user is single-threaded, but the agent can run work in parallel: `delegate` starts a
@@ -198,7 +219,7 @@ stops. Only the access-token field is excluded.
 | `deploy/` | `Dockerfile`, `docker-compose.yml`, `gcp/` (VM scripts + README), `macmini/` (launchd plist + `install.sh`) |
 | `ios/SHORTCUT.md` | Action button / Siri setup |
 | `scripts/import_tracker_settings.py` | Copies the exercise export URL and calendar feeds from the Project Tracker's config into `data/.env` |
-| `tests/` | pytest suite (no network, scripted model); `test_llm_contact.py` covers the LLM inbox on both engines |
+| `tests/` | pytest suite (no network, scripted model); `test_llm_contact.py` covers the LLM inbox on both engines, `test_fast_mode.py` which turns are fast |
 | `config.example.toml`, `.env.example` | Committed templates for `config.toml` and `data/.env` (both gitignored) |
 | `NEXT_STEPS.md` | Running log of what is done, deferred and next (shown at the start of every Claude Code session per `CLAUDE.local.md`) |
 | `data/` | (created, gitignored) the agent's whole state: `memory/`, `transcripts/`, `state.db`, `otter.db`, `roam.db`, `roam/`, `workspace/`, `images/`, `.env` |
@@ -236,7 +257,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 96 tests, no network, scripted model (incl. the LLM inbox on both engines)
+.venv/bin/python -m pytest -q                # 117 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)
@@ -281,6 +302,13 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **Fast mode "on" does not mean fast.** Under the Agent SDK the CLI's init message says
+  `fast_mode_state: "on"` as soon as the setting is accepted; whether the request was served fast is only in
+  the response's `usage.speed`. On 2026-11-14 a probe turn reported "on", then a `fast-mode-overage-rejected`
+  notification ("usage credit limit reached") and `speed: "standard"`: the subscription had no extra-usage
+  credits. Over the API key the same day `speed: "fast"` came back. Also: with `setting_sources=[]` a
+  `fastMode` in the user's own settings is ignored (`sdk_opt_in_required`); it must come through `settings=`.
 
 - **A resumed Claude Code session ignores a changed `system_prompt`.** Verified 2026-11-12 with a two-turn probe
   (prompt "the code word is APPLE", then resume with "BANANA": the model quotes APPLE). For five days the agent's

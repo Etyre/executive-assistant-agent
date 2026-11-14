@@ -201,19 +201,20 @@ class AgentSDKRunner:
     def run_turn(self, user_text: str, system_text: str, thread: str, channel: str, mode: str,
                  on_event: Callable[[dict[str, Any]], None] | None = None, images: list[dict[str, Any]] | None = None,
                  drain: Callable[[], list[dict[str, Any]]] | None = None, context: str = "main",
-                 situation: str = "") -> str:
+                 situation: str = "", fast: bool = False) -> str:
         """Called from Agent.handle (a worker thread): run the turn to completion on a private event loop.
         `context`: whose turn this is for per-context tool state ("main", or a worker's thread name).
         `situation`: the volatile context block, sent ahead of the user's text in this turn's message.
         `drain`, when given, is polled while the turn runs and returns messages the user sent meanwhile
         ({"text", "images" (stored blocks), "inflated" (blocks for the model)}); each is handed to the running
-        turn right away instead of waiting for it to end."""
+        turn right away instead of waiting for it to end.
+        `fast`: run this turn in fast mode (the user is waiting on the reply); every other turn is standard speed."""
         self._thread, self._channel, self._context = thread, channel, context
         result: dict[str, Any] = {}
 
         def runner() -> None:
             try:
-                result["text"] = asyncio.run(self._turn(user_text, system_text, on_event, images or [], drain, situation))
+                result["text"] = asyncio.run(self._turn(user_text, system_text, on_event, images or [], drain, situation, fast))
             except BaseException as e:  # noqa: BLE001
                 result["error"] = e
         t = threading.Thread(target=runner, name="agent-sdk-turn", daemon=True)
@@ -226,7 +227,8 @@ class AgentSDKRunner:
             raise LLMError(f"{type(e).__name__}: {e}") from e
         return result["text"]
 
-    def _options(self, system_text: str, resume: str | None):
+    def _options(self, system_text: str, resume: str | None, fast: bool = False):
+        import json
         from claude_agent_sdk import ClaudeAgentOptions
         llm = self.s.llm
         return ClaudeAgentOptions(
@@ -240,6 +242,9 @@ class AgentSDKRunner:
             thinking={"type": "adaptive", "display": llm.thinking_display},   # type: ignore[arg-type]
             max_turns=llm.max_tool_rounds,
             setting_sources=[],                                     # no CLAUDE.md / user settings leaking in
+            # Fast mode is a Claude Code setting; under the SDK it only counts from this flag-settings layer.
+            # Sent on every turn, false included, so a background turn can never inherit it.
+            settings=json.dumps({"fastMode": bool(fast)}),
             cwd=str(self.s.data_dir),
             include_partial_messages=on_event_supported(),
             resume=resume,
@@ -249,7 +254,7 @@ class AgentSDKRunner:
 
     async def _turn(self, user_text: str, system_text: str, on_event: Callable[[dict[str, Any]], None] | None,
                     images: list[dict[str, Any]] | None = None, drain: Callable[[], list[dict[str, Any]]] | None = None,
-                    situation: str = "") -> str:
+                    situation: str = "", fast: bool = False) -> str:
         from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, UserMessage, query
         from claude_agent_sdk import TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock
 
@@ -272,7 +277,7 @@ class AgentSDKRunner:
         first_text = (f"{SITUATION_HEAD}\n{situation}\n\n# THE MESSAGE\n" if situation else "") + user_text
         final = ""
         session_id = None
-        options = self._options(system_text, resume)
+        options = self._options(system_text, resume, fast)
 
         state = {"result_seen": False, "injected": 0}
 
@@ -375,6 +380,17 @@ class AgentSDKRunner:
                     continue
                 if isinstance(msg, SystemMessage) and msg.subtype == "init":
                     session_id = (msg.data or {}).get("session_id", session_id)
+                    fm = (msg.data or {}).get("fast_mode_state")
+                    if fast and fm != "on":      # asked for and not given (e.g. extra usage off): the turn runs at standard speed
+                        log.warning("fast mode requested but the CLI reports %r (%s)", fm, (msg.data or {}).get("fast_mode_disabled_reason"))
+                    elif not fast and fm == "on":
+                        log.error("fast mode is ON for a background turn; it should be off")
+                    else:
+                        log.info("agent sdk turn: fast mode %s", fm or "off")
+                elif isinstance(msg, SystemMessage) and msg.subtype == "notification" and str((msg.data or {}).get("key", "")).startswith("fast-mode"):
+                    # e.g. fast-mode-overage-rejected "usage credit limit reached": on the subscription fast mode is
+                    # paid from extra-usage credits; without them the CLI reports "on" and still serves standard speed.
+                    log.warning("fast mode not served this turn: %s (%s)", (msg.data or {}).get("text"), (msg.data or {}).get("key"))
         except LLMError:
             raise
         except Exception as e:  # noqa: BLE001

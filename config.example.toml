@@ -15,6 +15,7 @@ effort = "high"                 # low | medium | high | xhigh | max
 max_tokens = 16000
 fallbacks = true                # Anthropic server-side refusal fallbacks (beta) - set false to disable
 thinking_display = "summarized" # the Mac app's thinking pane shows the model's reasoning summary; "omitted" hides it
+fast_when_chatting = true       # fast mode (premium price) only on turns where you are waiting for the reply (chat, voice); never on checks, wakeups, heartbeats, ingestion, workers
 history_messages = 80
 max_tool_rounds = 20
 # For a local open-weight model on the Mac mini:

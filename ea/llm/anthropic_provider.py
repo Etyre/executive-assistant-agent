@@ -19,6 +19,7 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 class AnthropicProvider:
     name = "anthropic"
+    supports_fast = True                              # the agent loop passes fast=True only to providers that say so
 
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "high", fallbacks: bool = True,
                  client: anthropic.Anthropic | None = None, thinking_display: str = "summarized"):
@@ -54,7 +55,10 @@ class AnthropicProvider:
 
     def complete(self, *, system: list[dict[str, Any]], messages: list[dict[str, Any]],
                  tools: list[ToolSpec], max_tokens: int,
-                 on_text: Callable[[str], None] | None = None) -> LLMResponse:
+                 on_text: Callable[[str], None] | None = None, fast: bool = False) -> LLMResponse:
+        """`fast`: fast mode (`speed="fast"`: same model, quicker output, premium price) for this one call. The
+        caller sets it only while the user is waiting on the reply. Fast mode has a rate limit of its own, so a
+        429 there is retried once at standard speed rather than failing the turn."""
         kwargs: dict[str, Any] = dict(
             model=self.model, max_tokens=max_tokens, system=system, messages=self._with_history_breakpoint(messages),
             thinking={"type": "adaptive", "display": self.thinking_display}, output_config={"effort": self.effort},
@@ -63,17 +67,28 @@ class AnthropicProvider:
             kwargs["tools"] = self._tools(tools)
         if self.fallbacks:
             kwargs.update(betas=[FALLBACK_BETA], extra_body={"fallbacks": "default"})
+        if fast:
+            kwargs["speed"] = "fast"
         api = self.client.beta.messages if self.fallbacks else self.client.messages
-        try:
+
+        def call() -> Any:
             if on_text is None:
-                resp = api.create(**kwargs)
-            else:
-                # The stream helper accumulates the full message; the caller sees text as it is generated.
-                with api.stream(**kwargs) as stream:
-                    for event in stream:
-                        if event.type == "text" and event.text:
-                            on_text(event.text)
-                    resp = stream.get_final_message()
+                return api.create(**kwargs)
+            # The stream helper accumulates the full message; the caller sees text as it is generated.
+            with api.stream(**kwargs) as stream:
+                for event in stream:
+                    if event.type == "text" and event.text:
+                        on_text(event.text)
+                return stream.get_final_message()
+        try:
+            try:
+                resp = call()
+            except anthropic.RateLimitError:
+                if not fast:
+                    raise
+                log.warning("fast mode rate-limited; redoing this call at standard speed")
+                del kwargs["speed"]
+                resp = call()
         except anthropic.RateLimitError as e:
             raise LLMError(f"rate limited by Anthropic: {e.message}") from e
         except anthropic.APIStatusError as e:

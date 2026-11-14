@@ -37,6 +37,14 @@ the two apps share; the Focus Monitor got two read endpoints for it and was rest
 the phone). Every proactive turn now starts with `config.WAKEUP_RULE` (read checklist + Toggl first), at the
 agent's own request.
 
+**Fast mode (2026-11-14, Eli: "fast mode when and only when it's talking synchronously with me").** Built:
+chat and voice turns ask for fast mode, every background turn (checks, wakeups, heartbeat, ingestion, workers)
+runs at standard speed; `llm.fast_when_chatting` in config.toml. Verified live: the CLI turns it on/off per turn,
+and the API-key path returns `speed: fast`. **Needs Eli:** on the subscription fast mode is paid from extra-usage
+credits and the account's limit is reached ("Fast mode disabled · usage credit limit reached"), so chat turns
+are still served at standard speed until credits are added at claude.ai → Settings → Usage. Nothing to change
+here afterwards; the log line `fast mode not served this turn` stops appearing.
+
 ## Stage 1: talking to it on this Mac (about 15 minutes, no cloud)
 
 1. Anthropic API key into `data/.env` (copy `.env.example` there first). This is the one hard blocker; no model

@@ -200,10 +200,13 @@ class Agent:
             if mode == "chat" and store_user:
                 self._say("me", user_text, channel, client_id, images=[b["source"]["name"] for b in images])
             provider = self.provider
+            # Fast mode when, and only when, the user is waiting on this reply: a chat or voice turn. Checks,
+            # wakeups, heartbeats, ingestion and workers think at standard speed (and standard price).
+            fast = self.settings.llm.fast_when_chatting and mode in ("chat", "voice")
             if self.sdk is not None:                         # the Agent SDK runs the whole turn...
                 if self.sdk.use_subscription_now():
                     out = self._sdk_turn(thread, user_text, user_msg_id, channel, mode, on_event, isolated=not is_main,
-                                         images=[self.images.inflate(b) for b in images])
+                                         images=[self.images.inflate(b) for b in images], fast=fast)
                     if out is not None:
                         return out
                 if self.api_provider is None:                # ...unless the subscription is used up and the API is available
@@ -226,6 +229,8 @@ class Agent:
                 extra: dict[str, Any] = {}
                 if on_event is not None:
                     extra["on_text"] = lambda t: on_event({"type": "text", "text": t})
+                if fast and getattr(provider, "supports_fast", False):
+                    extra["fast"] = True
                 try:
                     resp = provider.complete(system=system, messages=messages + [volatile], tools=self.tools.specs(),
                                              max_tokens=self.settings.llm.max_tokens, **extra)
@@ -279,6 +284,8 @@ class Agent:
                     self._emit(kind="turn", channel=m["channel"], label=m["text"][:160], msg=None)
                     self._say("me", m["text"], m["channel"], m["client_id"])
                     log.info("mid-turn message folded in: %s", _short(m["text"]))
+                    if m["channel"] != "worker":             # the user is now waiting on what was a background turn
+                        fast = self.settings.llm.fast_when_chatting
                 self.convo.append(thread, "user", results, channel)
                 messages.append({"role": "user", "content": self.images.inflate_messages([{"role": "user", "content": results}])[0]["content"]})
                 if any(tu["name"] == "no_action_needed" for tu in resp.tool_uses):
@@ -297,9 +304,10 @@ class Agent:
 
     def _sdk_turn(self, thread: str, user_text: str, user_msg_id: int | None, channel: str, mode: str,
                   on_event: Callable[[dict[str, Any]], None] | None, isolated: bool = False,
-                  images: list[dict[str, Any]] | None = None) -> str | None:
+                  images: list[dict[str, Any]] | None = None, fast: bool = False) -> str | None:
         """One turn through the Agent SDK. Returns None when the subscription is rate-limited and the caller
-        should redo the turn over the API. `isolated`: a worker, on a runner of its own (fresh session)."""
+        should redo the turn over the API. `isolated`: a worker, on a runner of its own (fresh session).
+        `fast`: fast mode for the whole turn (the user is waiting on it)."""
         from ..llm.agent_sdk import AgentSDKRunner, ContactedEli, RateLimited
         # Only the stable block is the system prompt (a resumed SDK session keeps it); everything that changes
         # between turns rides in front of the user's message as the situation.
@@ -316,7 +324,7 @@ class Agent:
         try:
             final = runner.run_turn(user_text, system_text, thread, channel, mode, on_event, images=images,
                                     drain=None if isolated else self._drain_for_turn, context=thread if isolated else "main",
-                                    situation=situation)
+                                    situation=situation, fast=fast)
         except RateLimited as e:
             log.warning("agent sdk: %s; redoing the turn over the API", e)
             return None if self.api_provider is not None else f"(model error: {e})"
