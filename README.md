@@ -110,8 +110,8 @@ decision is one line in `Agent._handle` (`ea/agent/core.py`); `llm.fast_when_cha
   a background turn switches to fast from the moment a message from you is folded into it. A 429 from fast
   mode's own rate limit is redone once at standard speed.
 - **Cost on the subscription**: fast mode is not part of the plan; it is paid from the account's *extra usage*
-  credits (claude.ai → Settings → Usage). With no credits left the CLI still says "on" but serves standard
-  speed and the log says `fast mode not served this turn: Fast mode disabled · usage credit limit reached`.
+  credits (claude.ai → Settings → Usage), up to the *monthly spend limit* on the same page. With no credits
+  left, or the month's limit reached, the CLI still says "on" but serves standard speed and the log says `fast mode not served this turn: Fast mode disabled · usage credit limit reached`.
 - Chat and background turns share one session, and a change of speed cannot reuse the other speed's prompt
   cache, so the first turn after each switch re-reads the conversation uncached (slower to start, dearer).
 
@@ -306,8 +306,8 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - **Fast mode "on" does not mean fast.** Under the Agent SDK the CLI's init message says
   `fast_mode_state: "on"` as soon as the setting is accepted; whether the request was served fast is only in
   the response's `usage.speed`. On 2026-11-14 a probe turn reported "on", then a `fast-mode-overage-rejected`
-  notification ("usage credit limit reached") and `speed: "standard"`: the subscription had no extra-usage
-  credits. Over the API key the same day `speed: "fast"` came back. Also: with `setting_sources=[]` a
+  notification ("usage credit limit reached") and `speed: "standard"`: the account had $199 of credits but
+  its monthly spend limit ($50) was already used up, which gives the same message as having no credits. Over the API key the same day `speed: "fast"` came back. Also: with `setting_sources=[]` a
   `fastMode` in the user's own settings is ignored (`sdk_opt_in_required`); it must come through `settings=`.
 
 - **A resumed Claude Code session ignores a changed `system_prompt`.** Verified 2026-11-12 with a two-turn probe

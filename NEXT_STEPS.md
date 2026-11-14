@@ -41,8 +41,9 @@ agent's own request.
 chat and voice turns ask for fast mode, every background turn (checks, wakeups, heartbeat, ingestion, workers)
 runs at standard speed; `llm.fast_when_chatting` in config.toml. Verified live: the CLI turns it on/off per turn,
 and the API-key path returns `speed: fast`. **Needs Eli:** on the subscription fast mode is paid from extra-usage
-credits and the account's limit is reached ("Fast mode disabled · usage credit limit reached"), so chat turns
-are still served at standard speed until credits are added at claude.ai → Settings → Usage. Nothing to change
+credits and the account's monthly spend limit is used up ($50.58 of $50 on 2026-11-14, with $199 of credits
+unspent; the CLI says "Fast mode disabled · usage credit limit reached"), so chat turns are still served at
+standard speed until the limit is raised at claude.ai → Settings → Usage → Monthly spend limit → Manage. Nothing to change
 here afterwards; the log line `fast mode not served this turn` stops appearing.
 
 ## Stage 1: talking to it on this Mac (about 15 minutes, no cloud)
