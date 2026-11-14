@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS doc_snapshots (name TEXT PRIMARY KEY, mtime REAL NOT NULL, text TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY, ts REAL NOT NULL, engine TEXT, billing TEXT, model TEXT, speed TEXT NOT NULL,
+    mode TEXT, channel TEXT, thread TEXT, input INTEGER, cache_read INTEGER, cache_write_5m INTEGER,
+    cache_write_1h INTEGER, output INTEGER, cost_usd REAL
+);
+CREATE INDEX IF NOT EXISTS llm_usage_ts ON llm_usage(ts);
 """
 
 MAIN_THREAD = "main"
@@ -57,6 +63,25 @@ class ConversationStore:
             self._conn.commit()
 
     # ------------------------------------------------------------------ messages
+    # ------------------------------------------------------------------ model usage (see ea/usage.py)
+    def record_usage(self, row: dict[str, Any]) -> None:
+        cols = ("ts", "engine", "billing", "model", "speed", "mode", "channel", "thread", "input", "cache_read",
+                "cache_write_5m", "cache_write_1h", "output", "cost_usd")
+        with self._lock:
+            self._conn.execute(f"INSERT INTO llm_usage({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [row.get(c) for c in cols])
+            self._conn.commit()
+
+    def usage_totals(self, since_ts: float = 0.0) -> list[dict[str, Any]]:
+        """Per (speed, billing) since a time; `unpriced` counts calls on a model with no known price."""
+        rows = self._conn.execute(
+            "SELECT speed, billing, COUNT(*) AS calls, SUM(input) AS input, SUM(cache_read) AS cache_read, "
+            "SUM(cache_write_5m + cache_write_1h) AS cache_write, SUM(output) AS output, SUM(cost_usd) AS cost_usd, "
+            "SUM(cost_usd IS NULL) AS unpriced FROM llm_usage WHERE ts >= ? GROUP BY speed, billing ORDER BY speed, billing", (since_ts,))
+        return [dict(r) for r in rows]
+
+    def usage_first_ts(self) -> float | None:
+        return self._conn.execute("SELECT MIN(ts) FROM llm_usage").fetchone()[0]
+
     def append(self, thread: str, role: str, content: Any, channel: str = "") -> int:
         ts = time.time()
         with self._lock:

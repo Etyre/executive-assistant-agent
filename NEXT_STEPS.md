@@ -44,7 +44,10 @@ and the API-key path returns `speed: fast`. **Needs Eli:** on the subscription f
 credits and the account's monthly spend limit is used up ($50.58 of $50 on 2026-11-14, with $199 of credits
 unspent; the CLI says "Fast mode disabled · usage credit limit reached"), so chat turns are still served at
 standard speed until the limit is raised at claude.ai → Settings → Usage → Monthly spend limit → Manage. Nothing to change
-here afterwards; the log line `fast mode not served this turn` stops appearing.
+here afterwards; the log line `fast mode not served this turn` stops appearing. *Limit raised by Eli the same
+afternoon; a probe turn then came back `speed: fast`.* Usage is tracked by speed from 2026-11-14 15:3x:
+`python -m ea usage` (tokens and estimated cost, fast vs standard, and how much was actually charged). Worth
+watching there: each switch between a chat turn and a background turn rewrites the prompt cache at the new speed.
 
 ## Stage 1: talking to it on this Mac (about 15 minutes, no cloud)
 

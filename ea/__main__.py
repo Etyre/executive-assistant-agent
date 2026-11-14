@@ -214,11 +214,15 @@ def cmd_push_test(args: argparse.Namespace) -> None:
 
 
 def cmd_usage(args: argparse.Namespace) -> None:
-    """Subscription usage as the Claude Code CLI has reported it to the agent (one reading per change)."""
+    """Subscription usage as the Claude Code CLI has reported it to the agent (one reading per change), then
+    tokens and estimated cost split by speed (fast mode vs standard)."""
+    from . import usage
     from .agent.conversations import ConversationStore
     from .llm.agent_sdk import AgentSDKProvider, AgentSDKRunner
     s = config.load()
-    r = AgentSDKRunner(s, None, ConversationStore(s.state_db, s.transcripts_dir), lambda **k: None, AgentSDKProvider(s.llm.model, s.llm.effort))
+    convo = ConversationStore(s.state_db, s.transcripts_dir)
+    print(usage.report(convo) + "\n")
+    r = AgentSDKRunner(s, None, convo, lambda **k: None, AgentSDKProvider(s.llm.model, s.llm.effort))
     print(r.prompt_line())
     for x in r.readings(args.limit):
         pct = "" if x["utilization"] is None else f"{x['utilization'] * 100:5.0f}%"
@@ -299,7 +303,7 @@ def main() -> None:
     c = sub.add_parser("check"); c.add_argument("--llm", action="store_true", help="also make one model call"); c.set_defaults(fn=cmd_check)
     r = sub.add_parser("run-check"); r.add_argument("name"); r.set_defaults(fn=cmd_run_check)
     sub.add_parser("reindex").set_defaults(fn=cmd_reindex)
-    us = sub.add_parser("usage", help="subscription usage readings reported by the Claude Code CLI"); us.add_argument("--limit", type=int, default=30); us.set_defaults(fn=cmd_usage)
+    us = sub.add_parser("usage", help="tokens and cost by speed (fast vs standard), and the subscription usage readings from the Claude Code CLI"); us.add_argument("--limit", type=int, default=30); us.set_defaults(fn=cmd_usage)
     rm = sub.add_parser("roam", help="index the Roam export in data/roam/"); rm.add_argument("--reindex", action="store_true"); rm.set_defaults(fn=cmd_roam)
     rn = sub.add_parser("run", help="give the running agent a task in the background"); rn.add_argument("text"); rn.add_argument("--name", default="request"); rn.set_defaults(fn=cmd_run)
     nt = sub.add_parser("notify"); nt.add_argument("text"); nt.set_defaults(fn=cmd_notify)

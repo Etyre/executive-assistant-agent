@@ -22,7 +22,7 @@ import logging
 import threading
 from typing import Any, Callable
 
-from .. import config, contact
+from .. import config, contact, usage
 from ..agent.conversations import MID_TURN_PREFIX
 from .base import LLMError, LLMResponse, ToolSpec
 
@@ -81,6 +81,7 @@ class AgentSDKRunner:
         self._channel: str = ""
         self._server = None
         self._context = "main"
+        self._mode = ""
         self.last_rate_limit: dict[str, Any] | None = None
         self.notify: Callable[[str], None] | None = None     # set by Agent: a message to the user (push + apps)
 
@@ -209,7 +210,7 @@ class AgentSDKRunner:
         ({"text", "images" (stored blocks), "inflated" (blocks for the model)}); each is handed to the running
         turn right away instead of waiting for it to end.
         `fast`: run this turn in fast mode (the user is waiting on the reply); every other turn is standard speed."""
-        self._thread, self._channel, self._context = thread, channel, context
+        self._thread, self._channel, self._context, self._mode = thread, channel, context, mode
         result: dict[str, Any] = {}
 
         def runner() -> None:
@@ -312,6 +313,18 @@ class AgentSDKRunner:
                     continue
                 if isinstance(msg, StreamEvent):
                     ev = msg.event or {}
+                    # Usage per model call, from the API's own stream: message_start has the input side and the
+                    # speed it is served at, message_delta the final output count. (The usage on AssistantMessage
+                    # is repeated for every content block of one call, so it cannot be summed.)
+                    if ev.get("type") == "message_start":
+                        m0 = ev.get("message") or {}
+                        state["call"] = {"model": m0.get("model") or self.provider.model, "usage": dict(m0.get("usage") or {})}
+                    elif ev.get("type") == "message_delta" and state.get("call"):
+                        state["call"]["usage"].update({k: v for k, v in (ev.get("usage") or {}).items() if v is not None})
+                    elif ev.get("type") == "message_stop" and state.get("call"):
+                        call = state.pop("call")
+                        usage.record(self.convo, engine="agent_sdk", billing=self.s.llm.billing, model=call["model"], usage=call["usage"],
+                                     mode=self._mode, channel=self._channel, thread=self._thread)
                     if on_event and ev.get("type") == "content_block_start" and state.get("streamed") \
                             and (ev.get("content_block") or {}).get("type") == "text":
                         on_event({"type": "text", "text": "\n\n"})    # a new text block after tool calls: a paragraph break, as stored

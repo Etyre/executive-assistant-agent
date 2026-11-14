@@ -114,6 +114,22 @@ decision is one line in `Agent._handle` (`ea/agent/core.py`); `llm.fast_when_cha
   left, or the month's limit reached, the CLI still says "on" but serves standard speed and the log says `fast mode not served this turn: Fast mode disabled · usage credit limit reached`.
 - Chat and background turns share one session, and a change of speed cannot reuse the other speed's prompt
   cache, so the first turn after each switch re-reads the conversation uncached (slower to start, dearer).
+  Measured 2026-11-14 on an empty conversation: the first fast call wrote 20,763 tokens (prompt + tools) to
+  the cache and cost $0.33 for a one-word reply; a long conversation costs in proportion at each switch.
+  `python -m ea usage` shows what this adds up to.
+
+### Usage by speed
+
+Every model call on either engine is recorded in `state.db` (`llm_usage`, written by `ea/usage.py`): the speed
+the API says it *served* the call at (`usage.speed`, so a refused fast request counts as standard), the model,
+the kind of turn, the token counts (input, cache read, cache write, output) and a cost estimate at list prices.
+`python -m ea usage` prints fast vs standard for today, 7 days, 30 days and since tracking began (2026-11-14),
+with each one's share of tokens and of cost; `/health` → `usage_30_days_by_speed` has the 30-day totals.
+The cost is an estimate, not a bill: on the subscription only the fast calls are charged (to extra-usage
+credits), standard calls are covered by the plan; over the API key everything is charged. The report's last
+line per period says how much was actually charged. Prices are the `PRICES` table in `ea/usage.py`; a model
+not listed there is counted in tokens and shown with cost `?`. Under the Agent SDK the counts come from the
+API stream events the CLI passes through (`message_start` / `message_delta`), one row per model call.
 
 ### Parallel workers
 
@@ -212,6 +228,7 @@ stops. Only the access-token field is excluded.
 | `ea/memory/store.py` | Markdown memories + FTS5 index with dated provenance |
 | `ea/channels/` | `web.py` (apps/Shortcut endpoints, chat page, Twilio webhooks), `push.py` (APNs), `events.py` (live feed, presence), `twilio_voice.py`, `telegram.py` (optional) |
 | `ea/scheduler/jobs.py` | Reminders, self-scheduled wakeups, random heartbeat, scheduled checks, Otter ingestion, Roam backup sync |
+| `ea/usage.py` | Tokens and estimated cost per model call, split by speed (fast vs standard); the report behind `ea usage` |
 | `ea/workspace.py`, `ea/images.py`, `ea/integrations.py`, `ea/stt.py` | Shared documents, image attachments, integration status for `/health`, speech-to-text |
 | `instructions/` | `STANDING_INSTRUCTIONS.md`, `USER_SYSTEM_PROMPT.md`, `MEMORY_CONVENTIONS.md`, `habits/*.md` (one file per habit + README and example) |
 | `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs and relaunches the Mac app; own README) |
@@ -257,7 +274,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 117 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind)
+.venv/bin/python -m pytest -q                # 121 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)
@@ -274,7 +291,7 @@ llm-inbox test                               # fake inbox message end to end (sh
 .venv/bin/python -m ea reindex               # after editing memory files by hand
 .venv/bin/python -m ea otter --all           # first full Otter pull; --sync for the newest
 .venv/bin/python -m ea roam                  # index the Roam export in data/roam/
-.venv/bin/python -m ea usage                 # subscription usage readings from the Claude Code CLI
+.venv/bin/python -m ea usage                 # tokens and estimated cost, fast mode vs standard; then the subscription usage readings from the CLI
 
 # the Mac app
 cd apps/Atlas && ./build.sh                  # xcodegen + build + sign + relaunch (see apps/Atlas/README.md)

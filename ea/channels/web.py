@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from .. import config
+from .. import config, usage
 from ..agent.core import Agent
 from . import twilio_voice
 from .events import BUS, PRESENCE, EventBus, Presence
@@ -188,6 +188,7 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         return {"ok": True, "agent": s.agent_name, "provider": agent.provider.name, "model": s.llm.model,
                 "sources": agent.router.describe(), "push": push.describe(), "listeners": bus.subscribers,
                 "presence": presence.describe(),
+                "usage_30_days_by_speed": usage.summary(agent.convo, 30) if hasattr(agent.convo, "usage_totals") else [],   # fast vs standard: tokens, estimated cost
                 "engine": agent.sdk.describe() if getattr(agent, "sdk", None) else {"engine": agent.provider.name, "billing": "api"},
                 "workers": [w.describe() for w in agent.workers.running()] if getattr(agent, "workers", None) else []}
 

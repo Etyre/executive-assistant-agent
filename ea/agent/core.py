@@ -8,7 +8,7 @@ import logging
 import threading
 from typing import Any, Callable
 
-from .. import config, contact
+from .. import config, contact, usage
 from ..connectors.calendar import Calendar
 from ..connectors.exercise import Exercise
 from ..connectors.http import ServiceRouter
@@ -244,6 +244,8 @@ class Agent:
                         self.convo.delete(user_msg_id)
                     raise
                 answered = True
+                usage.record(self.convo, engine=getattr(provider, "name", ""), billing="api", model=resp.model or getattr(provider, "model", ""),
+                             usage=resp.usage, mode=mode, channel=channel, thread=thread)
                 self.convo.append(thread, "assistant", resp.content, channel)
                 messages.append({"role": "assistant", "content": resp.content})
                 contacted = contact.check(model=resp.model or getattr(provider, "model", ""), system=system, messages=messages[:-1] + [volatile],
