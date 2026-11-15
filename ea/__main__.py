@@ -223,7 +223,8 @@ def cmd_usage(args: argparse.Namespace) -> None:
     convo = ConversationStore(s.state_db, s.transcripts_dir)
     from zoneinfo import ZoneInfo
     tz = ZoneInfo(s.timezone)
-    print("\n\n".join([usage.report(convo), usage.daily_report(convo, 7, tz), usage.breakdown_report(convo, 7, tz)]) + "\n")
+    import datetime as dt
+    print("\n\n".join([usage.report(convo, dt.datetime.now(tz)), usage.daily_report(convo, 7, tz), usage.breakdown_report(convo, 7, tz)]) + "\n")
     r = AgentSDKRunner(s, None, convo, lambda **k: None, AgentSDKProvider(s.llm.model, s.llm.effort))
     print(r.prompt_line())
     for x in r.readings(args.limit):

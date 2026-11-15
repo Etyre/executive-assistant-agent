@@ -74,7 +74,7 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
     def model_usage(days: int = 7) -> Any:
         from .. import usage
         n = max(1, min(int(days or 7), 60))
-        return "\n\n".join([usage.report(store), usage.daily_report(store, n, tz), usage.breakdown_report(store, n, tz)])
+        return "\n\n".join([usage.report(store, dt.datetime.now(tz)), usage.daily_report(store, n, tz), usage.breakdown_report(store, n, tz)])
 
     @reg.tool("no_action_needed", "End a scheduled check without messaging the user. Say briefly why (logged, not sent).",
               {"properties": {"reason": {"type": "string"}}, "required": ["reason"]})

@@ -191,12 +191,13 @@ def summary(convo: Any, days: int | None = 30, now: dt.datetime | None = None) -
 
 
 def report(convo: Any, now: dt.datetime | None = None) -> str:
-    """The text `python -m ea usage` prints: fast vs standard, per period."""
+    """The text `python -m ea usage` prints: fast vs standard, per period. Pass `now` in the app's timezone so
+    "today" is the same day as in the per-day table and the cost alert (the machine's clock may be elsewhere)."""
     now = now or dt.datetime.now()
     first = convo.usage_first_ts()
     if not first:
         return "Model usage by speed: nothing recorded yet (tracking starts with the first model call after 2026-11-14)."
-    lines = [f"Model usage by speed (tracked since {dt.datetime.fromtimestamp(first):%Y-%m-%d %H:%M}; cost = estimate at list prices)"]
+    lines = [f"Model usage by speed (tracked since {dt.datetime.fromtimestamp(first, now.tzinfo):%Y-%m-%d %H:%M}; cost = estimate at list prices)"]
     for label, days in PERIODS:
         rows = summary(convo, days, now)
         lines.append(f"\n{label}:")
