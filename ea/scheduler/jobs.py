@@ -202,6 +202,31 @@ class Scheduler:
             log.info("document watch started; snapshots taken")
         return done
 
+    # ------------------------------------------------------------------ model costs
+    def watch_costs(self, now: dt.datetime) -> list[str]:
+        """Two proactive turns about the agent's own model spend (Eli, 2026-11-15): an alert, once a day at most,
+        when the day's charged spend passes `llm.cost_alert_usd_per_day`, and a review every `llm.cost_review_days`.
+        Timed from the store, not from a clock time, so a sleeping Mac delays the review instead of skipping it."""
+        from .. import usage
+        llm, convo, ran = self.s.llm, self.agent.convo, []
+        if llm.cost_alert_usd_per_day:
+            charged = usage.charged_today(convo, self.tz, now)
+            if charged > llm.cost_alert_usd_per_day and convo.get("cost_alert_day") != now.date().isoformat():
+                convo.set("cost_alert_day", now.date().isoformat())            # before the turn: a crash must not re-fire
+                log.warning("model spend today $%.2f is above $%.0f: running the cost alert", charged, llm.cost_alert_usd_per_day)
+                self.agent.run_check("model spend", config.COST_ALERT_PROMPT.format(charged=charged, limit=llm.cost_alert_usd_per_day), kind="cost alert")
+                ran.append("alert")
+        if llm.cost_review_days:
+            due = convo.get("cost_review_next")
+            if due is None:                                                    # first run: a full period from now
+                convo.set("cost_review_next", (now + dt.timedelta(days=llm.cost_review_days)).timestamp())
+            elif now.timestamp() >= due and self.in_active_window(now):
+                convo.set("cost_review_next", (now + dt.timedelta(days=llm.cost_review_days)).timestamp())
+                log.info("running the model cost review")
+                self.agent.run_check(f"model costs, every {llm.cost_review_days} days", config.COST_REVIEW_PROMPT.format(days=llm.cost_review_days), kind="cost review")
+                ran.append("review")
+        return ran
+
     # ------------------------------------------------------------------ one pass
     def tick(self) -> None:
         now = self.now()
@@ -236,6 +261,10 @@ class Scheduler:
             else:
                 log.info("reminder #%s due: %s", r["id"], r["text"])
                 self.agent._send_outbound(r["text"])
+        try:
+            self.watch_costs(now)
+        except Exception:  # noqa: BLE001
+            log.exception("cost watch failed")
         for c in self.due_checks(now):
             self.agent.convo.set(f"check_ran:{c.name}", now.date().isoformat())
             log.info("running scheduled check %s", c.name)

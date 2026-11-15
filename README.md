@@ -166,6 +166,19 @@ line per period says how much was actually charged. Prices are the `PRICES` tabl
 not listed there is counted in tokens and shown with cost `?`. Under the Agent SDK the counts come from the
 API stream events the CLI passes through (`message_start` / `message_delta`), one row per model call.
 
+`ea usage` also prints, and the agent itself reads through its `model_usage` tool (`ea/tools/assistant_tools.py`):
+a per-day table of what was charged beyond the plan (split into chat, keep-alive and other, with the number
+and cost of *cold starts*: fast calls that rewrote the conversation to the cache instead of reading it), and
+where the money goes by component (uncached input, cache reads, cache writes, output) and by kind of turn.
+
+**The agent watches its own costs (Eli, 2026-11-15).** Its memory `model-costs` (`data/memory/model-costs.md`)
+holds the background: billing, the two threads, the keep-alive, the estimate, how to read the tables, the
+settings. `Scheduler.watch_costs` (every poll) starts two kinds of proactive turn: `[cost alert: ...]`, once a
+day at most, when the day's charged spend passes `llm.cost_alert_usd_per_day` (150), and `[cost review: ...]`
+every `llm.cost_review_days` (7), both of which always message Eli. The review is timed from `cost_review_next`
+in state.db (first one 7 days after the first poll), inside the heartbeat's active window, so a sleeping Mac
+delays it instead of skipping it. The alert is checked against the day in `timezone`.
+
 ### Parallel workers
 
 The conversation with the user is single-threaded, but the agent can run work in parallel: `delegate` starts a
@@ -310,7 +323,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 125 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive)
+.venv/bin/python -m pytest -q                # 127 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive, the cost alert and review)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)

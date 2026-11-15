@@ -221,7 +221,9 @@ def cmd_usage(args: argparse.Namespace) -> None:
     from .llm.agent_sdk import AgentSDKProvider, AgentSDKRunner
     s = config.load()
     convo = ConversationStore(s.state_db, s.transcripts_dir)
-    print(usage.report(convo) + "\n")
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(s.timezone)
+    print("\n\n".join([usage.report(convo), usage.daily_report(convo, 7, tz), usage.breakdown_report(convo, 7, tz)]) + "\n")
     r = AgentSDKRunner(s, None, convo, lambda **k: None, AgentSDKProvider(s.llm.model, s.llm.effort))
     print(r.prompt_line())
     for x in r.readings(args.limit):

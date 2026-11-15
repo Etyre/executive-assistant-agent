@@ -65,6 +65,17 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
         send_message(text)
         return "sent"
 
+    @reg.tool("model_usage", "What your own model calls cost: tokens and estimated cost split by speed (fast mode vs standard) "
+              "for today, 7 days, 30 days and since tracking began; a per-day table of what was charged to the user's "
+              "usage credits (chat, keep-alive, cold starts) and what the plan covered; and where the money goes by "
+              "component (uncached input, cache reads, cache writes, output) and by kind of turn. Your memory "
+              "`model-costs` explains the numbers.",
+              {"properties": {"days": {"type": "integer", "description": "days covered by the per-day and breakdown tables (default 7)"}}})
+    def model_usage(days: int = 7) -> Any:
+        from .. import usage
+        n = max(1, min(int(days or 7), 60))
+        return "\n\n".join([usage.report(store), usage.daily_report(store, n, tz), usage.breakdown_report(store, n, tz)])
+
     @reg.tool("no_action_needed", "End a scheduled check without messaging the user. Say briefly why (logged, not sent).",
               {"properties": {"reason": {"type": "string"}}, "required": ["reason"]})
     def no_action_needed(reason: str) -> Any:

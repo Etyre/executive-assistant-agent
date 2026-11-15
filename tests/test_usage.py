@@ -96,3 +96,63 @@ def test_sdk_engine_records_from_the_stream(monkeypatch):
     assert [(r["speed"], r["engine"], r["billing"], r["mode"], r["output"], r["cache_read"], r["cache_write_1h"]) for r in rows] == \
         [("fast", "agent_sdk", "subscription", "chat", 40, 2000, 300), ("fast", "agent_sdk", "subscription", "chat", 80, 2000, 300)]
     assert rows[0]["cost_usd"] == pytest.approx(2 * (5 * 4 + 300 * 8 + 2000 * 0.20 + 40 * 20) / 1e6)
+
+
+def test_per_day_and_component_breakdowns_and_the_agents_tool(tmp_path):
+    c = _store(tmp_path)
+    opus = dict(engine="agent_sdk", billing="subscription", model="claude-opus-5-5")
+    usage.record(c, **opus, mode="chat", usage={"speed": "fast", "input_tokens": 2, "output_tokens": 100,
+                                               "cache_creation": {"ephemeral_1h_input_tokens": 200_000}})      # a cold start: $3.20 + output
+    usage.record(c, **opus, mode="chat", usage={"speed": "fast", "input_tokens": 2, "output_tokens": 100, "cache_read_input_tokens": 200_000})
+    usage.record(c, **opus, mode="keepalive", usage={"speed": "fast", "input_tokens": 2, "output_tokens": 4, "cache_read_input_tokens": 200_000})
+    usage.record(c, **opus, mode="proactive", usage={"input_tokens": 2, "output_tokens": 500, "cache_read_input_tokens": 300_000})
+    today = usage.daily(c, 3)[-1]
+    assert today["fast_calls"] == 3 and today["cold_starts"] == 1 and today["cold_start_usd"] == pytest.approx(3.204, abs=0.001)
+    assert today["keepalive"] == pytest.approx(0.0802, abs=0.001) and today["chat"] == pytest.approx(3.204 + 0.084, abs=0.001)
+    assert today["charged"] == pytest.approx(today["chat"] + today["keepalive"]) == usage.charged_today(c)
+    assert today["plan_list_usd"] == pytest.approx(0.07, abs=0.001)                  # the standard call: counted, not charged
+    assert usage.daily(c, 3)[0]["calls"] == 0                                        # two days ago: nothing
+    text = usage.breakdown_report(c, 7)
+    assert "cache writes (1 hour)" in text and "cache reads" in text and "keepalive" in text and "proactive" in text
+    parts = usage.component_costs("claude-opus-5-5", "fast", {"cache_write_1h": 1_000_000, "output": 1_000_000})
+    assert parts["cache_write_1h"] == 16 and parts["output"] == 40 and sum(parts.values()) == usage.cost("claude-opus-5-5", "fast", usage.tokens({"output_tokens": 1_000_000, "cache_creation": {"ephemeral_1h_input_tokens": 1_000_000}}))
+    # the agent reads all of it through its own tool
+    from ea.tools import assistant_tools
+    from ea.tools.registry import ToolRegistry
+    reg = ToolRegistry()
+    assistant_tools.register(reg, c, config.load(), lambda t: None, lambda r: None)
+    out, err = reg.dispatch("model_usage", {"days": 3})
+    assert not err and "Model usage by speed" in out and "Charged beyond the plan, per day" in out and "Cost by component" in out and "Cost by kind of turn" in out
+
+
+def test_scheduler_alerts_once_a_day_above_the_line_and_reviews_every_week():
+    from ea.scheduler.jobs import Scheduler
+    config.load.cache_clear()
+    s = config.load()
+    s.llm.provider = "anthropic"
+    s.sources.otter_logseq_graph = ""
+    ran = []
+
+    class P:
+        name, model = "anthropic", "claude-opus-5-5"
+
+        def complete(self, *, system, messages, tools, max_tokens, on_text=None, fast=False):
+            ran.append(next(b["text"] for b in messages[-2]["content"] if b.get("type") == "text") if isinstance(messages[-2]["content"], list) else messages[-2]["content"])
+            return LLMResponse(content=[{"type": "text", "text": "noted"}], stop_reason="end_turn")
+    a = Agent(s, provider=P())
+    for k in ("cost_alert_day", "cost_review_next"):
+        a.convo.set(k, None)
+    a.convo._conn.execute("DELETE FROM llm_usage"); a.convo._conn.commit()
+    t0 = dt.datetime.now(dt.timezone.utc).astimezone(__import__("zoneinfo").ZoneInfo(s.timezone)).replace(hour=12, minute=0)
+    sched = Scheduler(a, s, now_fn=lambda: t0)
+    assert sched.watch_costs(t0) == [] and a.convo.get("cost_review_next") == pytest.approx((t0 + dt.timedelta(days=7)).timestamp())
+    usage.record(a.convo, engine="agent_sdk", billing="subscription", model="claude-opus-5-5", mode="chat",
+                 usage={"speed": "fast", "input_tokens": 1, "output_tokens": 1, "cache_creation": {"ephemeral_1h_input_tokens": 10_000_000}})   # $160
+    a.convo._conn.execute("UPDATE llm_usage SET ts = ?", (t0.timestamp() - 60,)); a.convo._conn.commit()
+    assert sched.watch_costs(t0) == ["alert"] and "[cost alert: model spend]" in ran[-1] and "$160.00" in ran[-1] and "$150 a day" in ran[-1]
+    assert sched.watch_costs(t0) == []                                               # once a day
+    assert sched.watch_costs(t0 + dt.timedelta(days=6)) == []                        # a new day, nothing spent, review not due
+    week = t0 + dt.timedelta(days=7, minutes=1)
+    assert sched.watch_costs(week.replace(hour=3)) == []                             # due, but in the night: waits for the active window
+    assert sched.watch_costs(week) == ["review"] and "[cost review: model costs, every 7 days]" in ran[-1] and "model_usage" in ran[-1]
+    assert sched.watch_costs(week) == []

@@ -55,7 +55,11 @@ of the main one, full raw history), background work on the standard one, each ca
 start of its turn (text in full, tool calls and results shortened), and the chat session's cache is re-read
 every 55 minutes so it does not expire between chats (README, "Two threads"). Estimate from the same replay:
 about $24 a day. **To watch:** `python -m ea usage` after a few days; the first chat after the restart pays one
-full rewrite (about $3 at 200k tokens) to create the fork.
+full rewrite (about $3 at 200k tokens) to create the fork. `llm.fast_own_thread = false` goes back to one thread.
+The agent now watches this itself: a `model_usage` tool, the memory `model-costs`, a check-in to Eli every 7
+days and an alert the day charged spend passes $150 (README, "Usage by speed"). After the move to a server the
+cold starts from the Mac sleeping go away. Still to confirm: that credits are debited at exactly list prices
+(compare the credit balance on claude.ai with `python -m ea usage`).
 
 ## Stage 1: talking to it on this Mac (about 15 minutes, no cloud)
 

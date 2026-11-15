@@ -63,6 +63,113 @@ def record(convo: Any, *, engine: str, billing: str, model: str, usage: dict[str
         log.exception("usage accounting failed")
 
 
+COMPONENTS = ("input", "cache_read", "cache_write_5m", "cache_write_1h", "output")
+COMPONENT_LABELS = {"input": "uncached input", "cache_read": "cache reads", "cache_write_5m": "cache writes (5 min)",
+                    "cache_write_1h": "cache writes (1 hour)", "output": "output"}
+
+
+def component_costs(model: str, speed: str, t: dict[str, Any]) -> dict[str, float] | None:
+    """`cost()` split into its five parts (same prices), or None for a model with no listed price."""
+    price = next((p for name, p in PRICES.items() if (model or "").startswith(name)), None)
+    if price is None:
+        return None
+    p_in, p_out, p_read = price
+    per = {"input": p_in, "cache_read": p_read, "cache_write_5m": p_in * CACHE_WRITE_5M, "cache_write_1h": p_in * CACHE_WRITE_1H, "output": p_out}
+    k = FAST_MULTIPLIER if speed == "fast" else 1.0
+    return {c: (t.get(c) or 0) * per[c] * k / 1e6 for c in COMPONENTS}
+
+
+def breakdown_report(convo: Any, days: int = 7, tz: dt.tzinfo | None = None, now: dt.datetime | None = None) -> str:
+    """Where the money goes over the last `days` days: by cost component per speed (how much is cache reads, cache
+    writes, output), and by kind of turn (chat, voice, proactive, worker, keepalive)."""
+    now = now or dt.datetime.now(tz)
+    start = (now - dt.timedelta(days=max(days, 1) - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = convo.usage_rows(start.timestamp())
+    if not rows:
+        return f"Cost breakdown, last {days} days: no model calls recorded."
+    comp: dict[str, dict[str, list[float]]] = {}          # speed -> component -> [tokens, usd]
+    modes: dict[tuple[str, str], dict[str, float]] = {}   # (mode, speed) -> totals
+    for r in rows:
+        cc = component_costs(r["model"], r["speed"], r) or {}
+        s = comp.setdefault(r["speed"], {c: [0, 0.0] for c in COMPONENTS})
+        for c in COMPONENTS:
+            s[c][0] += r[c] or 0
+            s[c][1] += cc.get(c, 0.0)
+        m = modes.setdefault((r["mode"] or "?", r["speed"]), {"calls": 0, "tokens": 0, "usd": 0.0, "charged": 0.0})
+        m["calls"] += 1
+        m["tokens"] += sum(r[c] or 0 for c in COMPONENTS)
+        m["usd"] += r["cost_usd"] or 0.0
+        m["charged"] += (r["cost_usd"] or 0.0) if is_charged(r) else 0.0
+    lines = [f"Cost by component, last {days} days (estimate at list prices; fast mode is twice the standard price on every component):",
+             f"  {'speed':10}{'component':24}{'tokens':>14}{'cost':>10}{'share of that speed':>21}"]
+    for speed in sorted(comp):
+        total = sum(v[1] for v in comp[speed].values()) or 1.0
+        for c in COMPONENTS:
+            tok, usd = comp[speed][c]
+            if tok:
+                lines.append(f"  {speed:10}{COMPONENT_LABELS[c]:24}{tok:>14,}{'$' + format(usd, ',.2f'):>10}{usd / total:>21.0%}")
+    lines += ["", f"Cost by kind of turn, last {days} days:",
+              f"  {'kind':12}{'speed':10}{'calls':>7}{'tokens':>14}{'cost (list)':>13}{'charged':>10}"]
+    for (mode, speed), m in sorted(modes.items()):
+        lines.append(f"  {mode:12}{speed:10}{m['calls']:>7}{m['tokens']:>14,}{'$' + format(m['usd'], ',.2f'):>13}{'$' + format(m['charged'], ',.2f'):>10}")
+    return "\n".join(lines)
+
+
+def is_charged(row: dict[str, Any]) -> bool:
+    """Is this call paid for beyond the subscription? Over the API key everything is; on the subscription only
+    fast-mode calls are (usage credits), standard ones are covered by the plan."""
+    return row["billing"] == "api" or row["speed"] == "fast"
+
+
+COLD_START_TOKENS = 20_000        # a fast call that read nothing from the cache and wrote at least this much rewrote the conversation
+
+
+def daily(convo: Any, days: int = 7, tz: dt.tzinfo | None = None, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+    """Per calendar day (in `tz`), newest last: what was charged and why. `charged`: dollars beyond the plan;
+    `chat` / `keepalive` / `other`: its split by kind of turn; `cold_starts` (+ `cold_start_usd`): fast calls that
+    rewrote the conversation to the cache instead of reading it; `plan_list_usd`: plan-covered work at list price."""
+    now = now or dt.datetime.now(tz)
+    start = (now - dt.timedelta(days=max(days, 1) - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(max(days, 1)):
+        d = (start + dt.timedelta(days=i)).date().isoformat()
+        out[d] = {"day": d, "charged": 0.0, "chat": 0.0, "keepalive": 0.0, "other": 0.0, "fast_calls": 0, "cold_starts": 0,
+                  "cold_start_usd": 0.0, "plan_list_usd": 0.0, "calls": 0}
+    for r in convo.usage_rows(start.timestamp()):
+        d = out.get(dt.datetime.fromtimestamp(r["ts"], tz).date().isoformat())
+        if d is None:
+            continue
+        usd = r["cost_usd"] or 0.0
+        d["calls"] += 1
+        if not is_charged(r):
+            d["plan_list_usd"] += usd
+            continue
+        d["charged"] += usd
+        d["chat" if r["mode"] in ("chat", "voice") else "keepalive" if r["mode"] == "keepalive" else "other"] += usd
+        if r["speed"] == "fast":
+            d["fast_calls"] += 1
+            if not r["cache_read"] and (r["cache_write_1h"] or 0) + (r["cache_write_5m"] or 0) >= COLD_START_TOKENS:
+                d["cold_starts"] += 1
+                d["cold_start_usd"] += usd
+    return list(out.values())
+
+
+def charged_today(convo: Any, tz: dt.tzinfo | None = None, now: dt.datetime | None = None) -> float:
+    return daily(convo, 1, tz, now)[-1]["charged"]
+
+
+def daily_report(convo: Any, days: int = 7, tz: dt.tzinfo | None = None, now: dt.datetime | None = None) -> str:
+    rows = daily(convo, days, tz, now)
+    lines = [f"Charged beyond the plan, per day (last {len(rows)} days; estimate at list prices):",
+             f"  {'day':12}{'charged':>10}{'chat':>10}{'keep-alive':>12}{'other':>9}{'fast calls':>12}{'cold starts':>13}{'cold $':>9}{'plan work (list)':>18}"]
+    for d in rows:
+        lines.append(f"  {d['day']:12}{d['charged']:>10.2f}{d['chat']:>10.2f}{d['keepalive']:>12.2f}{d['other']:>9.2f}{d['fast_calls']:>12}"
+                     f"{d['cold_starts']:>13}{d['cold_start_usd']:>9.2f}{d['plan_list_usd']:>18.2f}")
+    total = sum(d["charged"] for d in rows)
+    lines.append(f"  total charged ${total:,.2f}, average ${total / len(rows):,.2f} a day")
+    return "\n".join(lines)
+
+
 PERIODS = (("today", 0), ("last 7 days", 7), ("last 30 days", 30), ("since tracking began", None))
 
 

@@ -79,6 +79,10 @@ class ConversationStore:
             "SUM(cost_usd IS NULL) AS unpriced FROM llm_usage WHERE ts >= ? GROUP BY speed, billing ORDER BY speed, billing", (since_ts,))
         return [dict(r) for r in rows]
 
+    def usage_rows(self, since_ts: float = 0.0) -> list[dict[str, Any]]:
+        """Every recorded model call since a time, oldest first (for the per-day breakdown)."""
+        return [dict(r) for r in self._conn.execute("SELECT * FROM llm_usage WHERE ts >= ? ORDER BY id", (since_ts,))]
+
     def usage_first_ts(self) -> float | None:
         return self._conn.execute("SELECT MIN(ts) FROM llm_usage").fetchone()[0]
 
