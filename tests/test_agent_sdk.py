@@ -17,6 +17,8 @@ def _agent(monkeypatch):
     s.sources.otter_logseq_graph = ""
     a = Agent(s)
     a.convo.set("sdk_api_fallback_until", None)     # the session-wide test data dir keeps an earlier test's fallback window
+    for k in ("sdk_session:main", "sdk_session:main:fast", "sdk_seen:main", "sdk_seen:main:fast"):   # ...and its sessions
+        a.convo.set(k, None)
     return a, s
 
 
@@ -96,7 +98,7 @@ def test_sdk_error_is_reported_not_raised(monkeypatch):
 
 def test_subscription_fallback_to_api(monkeypatch):
     """Near the end of the subscription window the SDK reports it; turns then run over the API until the reset,
-    and the SDK session is restarted with a recap afterwards (Eli, 2026-11-06)."""
+    and the SDK session then resumes with a catch-up of what the API handled (it used to restart with a recap)."""
     import time
     from ea.llm.base import LLMResponse
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
@@ -114,7 +116,7 @@ def test_subscription_fallback_to_api(monkeypatch):
     reset = int(time.time()) + 600
 
     async def fake_query(*, prompt, options=None, transport=None):
-        sdk_prompts.append((prompt, options))
+        sdk_prompts.append((await _first_text(prompt), options))
         yield sdk.RateLimitEvent(rate_limit_info=sdk.RateLimitInfo(status="allowed_warning", resets_at=reset, rate_limit_type="five_hour", utilization=0.93), uuid="u", session_id="s1")
         yield sdk.AssistantMessage(content=[sdk.TextBlock(text="sdk reply")], model="m")
         yield sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1, session_id="s1", result="sdk reply")
@@ -124,10 +126,12 @@ def test_subscription_fallback_to_api(monkeypatch):
     assert a.handle("two", channel="app") == "api reply"                 # fallback: over the API, with the stored history
     assert len(sdk_prompts) == 1 and len(api_calls) == 1
     assert [m["role"] for m in api_calls[0]["messages"]][:3] == ["user", "assistant", "user"]
-    # the window resets: back to the subscription, fresh session with a recap of what the API handled
+    # the window resets: back to the subscription, same session, told what the API handled meanwhile
     a.convo.set("sdk_api_fallback_until", time.time() - 1)
     assert a.handle("three", channel="app") == "sdk reply"
-    assert sdk_prompts[1][1].resume is None and "RECENT CONVERSATION" in sdk_prompts[1][1].system_prompt and "api reply" in sdk_prompts[1][1].system_prompt
+    text, o = sdk_prompts[1]
+    assert o.resume == "s1" and "RECENT CONVERSATION" not in o.system_prompt
+    assert "# WHAT HAPPENED OUTSIDE THIS THREAD" in text and "\ntwo" in text and "api reply" in text and text.endswith("# THE MESSAGE\nthree")
     assert sdk_prompts[1][1].env == {"ANTHROPIC_API_KEY": ""}            # the subprocess never sees the API key
 
 

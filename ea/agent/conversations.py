@@ -91,6 +91,16 @@ class ConversationStore:
         self._transcribe(thread, ts, role, content, channel)
         return int(cur.lastrowid)
 
+    def last_id(self, thread: str) -> int:
+        return int(self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages WHERE thread=?", (thread,)).fetchone()[0])
+
+    def rows_between(self, thread: str, after_id: int, before_id: int | None = None) -> list[dict[str, Any]]:
+        """Stored messages of a thread with after_id < id < before_id, oldest first (for agent/catchup.py)."""
+        q, args = "SELECT id, ts, role, channel, content FROM messages WHERE thread=? AND id>?", [thread, after_id]
+        if before_id is not None:
+            q += " AND id<?"; args.append(before_id)
+        return [{**dict(r), "content": json.loads(r["content"])} for r in self._conn.execute(q + " ORDER BY id", args)]
+
     def delete(self, msg_id: int) -> None:
         """Take back a message that never got an answer (a turn whose model call failed), so it does not sit in
         the history as a dangling instruction for the next turn. The transcript keeps it."""

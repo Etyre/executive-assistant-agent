@@ -75,8 +75,8 @@ is the same either way, and you can switch back and forth with a restart:
   Our tools are exposed to it over an in-process MCP server; Claude Code's own tools are off. History lives in
   the SDK's resumable session; every block is still mirrored into the conversation store, so the apps, the
   thinking pane and transcripts work unchanged. When the CLI reports the subscription window at
-  `llm.api_fallback_utilization` (90%) or rejected, turns run over the API until the window resets, then the
-  SDK session restarts with a recap. `/health` → `engine` shows which is in use. Only the stable prompt is the
+  `llm.api_fallback_utilization` (90%) or rejected, turns run over the API until the window resets; the
+  SDK sessions then resume and are caught up on what the API handled (see "Two threads" below). `/health` → `engine` shows which is in use. Only the stable prompt is the
   session's system prompt; the per-turn context (time, reminders, document roots, memory index, engine state)
   is sent as a "SITUATION" block ahead of the user's text in each turn's message, because a resumed session
   keeps the system prompt it was created with. When the stable prompt changes (code, standing instructions),
@@ -112,11 +112,40 @@ decision is one line in `Agent._handle` (`ea/agent/core.py`); `llm.fast_when_cha
 - **Cost on the subscription**: fast mode is not part of the plan; it is paid from the account's *extra usage*
   credits (claude.ai → Settings → Usage), up to the *monthly spend limit* on the same page. With no credits
   left, or the month's limit reached, the CLI still says "on" but serves standard speed and the log says `fast mode not served this turn: Fast mode disabled · usage credit limit reached`.
-- Chat and background turns share one session, and a change of speed cannot reuse the other speed's prompt
-  cache, so the first turn after each switch re-reads the conversation uncached (slower to start, dearer).
-  Measured 2026-11-14 on an empty conversation: the first fast call wrote 20,763 tokens (prompt + tools) to
-  the cache and cost $0.33 for a one-word reply; a long conversation costs in proportion at each switch.
-  `python -m ea usage` shows what this adds up to.
+### Two threads: one for chat, one for background work
+
+Fast mode and standard speed cannot share a prompt cache. On one session, every switch between a chat turn
+(fast) and a background turn (standard) rewrote the whole conversation to the cache at the new speed; with a
+conversation of 200k to 900k tokens that is $3 to $15 a switch at fast-mode prices. Replaying the real history
+of 6 to 14 Nov 2026 priced fast mode on one session at $44 to $72 a day (2026-11-15). So under the Agent SDK the
+main conversation runs as **two sessions with the same history** (`ea/llm/agent_sdk.py`):
+
+- `sdk_session:main` (state.db key-value): background turns, standard speed. This is the original session.
+- `sdk_session:main:fast`: chat and voice turns, fast mode. Created on the first chat as a fork of the other
+  (the whole history, raw), which costs one full cache write at fast prices, once.
+- **Catch-up.** Neither session sees the other's turns, so each keeps a pointer (`sdk_seen:main`,
+  `sdk_seen:main:fast`) to the last stored message it knows about, and a turn's message starts with a block
+  "WHAT HAPPENED OUTSIDE THIS THREAD": every stored message after the pointer (`ea/agent/catchup.py`). The
+  user's words and the agent's own words are replayed in full; tool calls and tool results are cut to 300
+  characters each (they are most of the bulk; the agent can call the tool again or read the transcript); the
+  other thread's private thinking is left out. Turns that ran over the API during a subscription fallback
+  are caught up the same way. Log: `fast lane catches up on N characters from outside it`.
+- **Keep-alive.** The cache lasts 60 minutes after its last use. A loop in the scheduler (`Scheduler._keepalive`
+  → `Agent.keep_fast_warm`) re-reads the chat session's cache `llm.fast_keepalive_minutes` (55) after its last
+  model call: a throwaway fork of the session answers a one-line server message in fast mode with the same
+  prompt, tools and options as a chat turn. The fork is not saved, no tool is run for it, and the chat session
+  does not see it. A read costs $0.40 per million tokens ($0.08 at 200k), against $16 per million to rewrite.
+  It stops `llm.fast_keepalive_max_idle_hours` (36) after your last chat, about where the pings have cost as
+  much as one rewrite, and it is skipped once the cache has already expired (the Mac was asleep). Log:
+  `fast cache keep-alive: read N tokens, wrote M, about $X`; in `ea usage` these calls are fast-speed rows
+  (`mode = keepalive` in `llm_usage`). `fast_keepalive_minutes = 0` turns it off.
+- **What the two threads do not share.** The same events reach each thread in a different form: its own turns
+  whole (thinking, full tool results), the other's as the catch-up. Each thread is also compacted by the SDK
+  on its own schedule, so their summaries of old history differ. Workers are unaffected (own sessions,
+  standard speed).
+- Verified live 2026-11-15 on a throwaway data folder: after a background turn the next chat read its cache
+  (28,533 tokens read, 1,582 written) where one session rewrote everything; each thread answered correctly
+  about the other's turn; the keep-alive read 30,115 tokens at fast speed for $0.014 and left no session file.
 
 ### Usage by speed
 
@@ -220,14 +249,15 @@ stops. Only the access-token field is excluded.
 | `ea/agent/workers.py` | Background workers (`delegate`): isolated turns in parallel, results handed back to the main agent |
 | `ea/llm/base.py` | Neutral shapes: `ToolSpec`, `LLMResponse`, `Provider` |
 | `ea/llm/anthropic_provider.py` | Messages API: adaptive thinking, effort, caching breakpoints, refusal fallbacks |
-| `ea/llm/agent_sdk.py` | Claude Agent SDK engine: our tools as an in-process MCP server, resumable sessions, subscription usage + API fallback |
+| `ea/llm/agent_sdk.py` | Claude Agent SDK engine: our tools as an in-process MCP server, resumable sessions (a fast one for chat, a standard one for background work), the cache keep-alive, subscription usage + API fallback |
+| `ea/agent/catchup.py` | The catch-up one SDK session gets about the other's turns: text in full, tool calls and results shortened |
 | `ea/llm/openai_compat_provider.py` | Ollama / vLLM / LM Studio translation layer |
 | `ea/llm/factory.py` | Picks the provider from `llm.provider` |
 | `ea/tools/` | `registry.py` + `data_tools`, `tracker_tools`, `memory_tools`, `assistant_tools`, `otter_tools`, `roam_tools`, `web_tools`, `worker_tools`, `workspace_tools` |
 | `ea/connectors/` | `http.py` (router: bridge vs localhost), `toggl`, `focus_monitor`, `sleep_bandit` (+Oura), `exercise`, `calendar`, `project_tracker`, `otter` (Otter.ai API + Logseq archive), `roam`, `browser` (Playwright) |
 | `ea/memory/store.py` | Markdown memories + FTS5 index with dated provenance |
 | `ea/channels/` | `web.py` (apps/Shortcut endpoints, chat page, Twilio webhooks), `push.py` (APNs), `events.py` (live feed, presence), `twilio_voice.py`, `telegram.py` (optional) |
-| `ea/scheduler/jobs.py` | Reminders, self-scheduled wakeups, random heartbeat, scheduled checks, Otter ingestion, Roam backup sync |
+| `ea/scheduler/jobs.py` | Reminders, self-scheduled wakeups, random heartbeat, scheduled checks, Otter ingestion, Roam backup sync, the fast-cache keep-alive loop |
 | `ea/usage.py` | Tokens and estimated cost per model call, split by speed (fast vs standard); the report behind `ea usage` |
 | `ea/workspace.py`, `ea/images.py`, `ea/integrations.py`, `ea/stt.py` | Shared documents, image attachments, integration status for `/health`, speech-to-text |
 | `instructions/` | `STANDING_INSTRUCTIONS.md`, `USER_SYSTEM_PROMPT.md`, `MEMORY_CONVENTIONS.md`, `habits/*.md` (one file per habit + README and example) |
@@ -274,7 +304,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 121 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed)
+.venv/bin/python -m pytest -q                # 124 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)
@@ -319,6 +349,14 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **Fast and standard speed do not share a prompt cache, and the cache dies after an hour.** One session used
+  for both rewrote the whole conversation at every switch ($3.27 for one short chat reply on 2026-11-14, with
+  204,551 tokens written). Hence two sessions plus a keep-alive; see "Two threads". If chat turns get dear
+  again, look in `llm_usage` for fast rows with a large `cache_write_1h` and no `cache_read`: that is a cold
+  start (keep-alive off, Mac asleep over an hour, or the standing prompt changed and the session restarted).
+- **`tests/test_tracker_open.py::test_tracker_tools_point_at_tracker_open_when_the_app_is_down`** fails when
+  the tracker app is not in the state the test assumes (seen 2026-11-15, unrelated to the change being made).
 
 - **Fast mode "on" does not mean fast.** Under the Agent SDK the CLI's init message says
   `fast_mode_state: "on"` as soon as the setting is accepted; whether the request was served fast is only in

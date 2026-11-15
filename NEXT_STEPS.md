@@ -49,6 +49,14 @@ afternoon; a probe turn then came back `speed: fast`.* Usage is tracked by speed
 `python -m ea usage` (tokens and estimated cost, fast vs standard, and how much was actually charged). Worth
 watching there: each switch between a chat turn and a background turn rewrites the prompt cache at the new speed.
 
+**Two threads (2026-11-15).** Replaying 6 to 14 Nov priced fast mode on one session at $44 to $72 a day, nearly
+all of it cache rewrites at speed switches and after idle hours. Now: chat runs on its own fast session (a fork
+of the main one, full raw history), background work on the standard one, each caught up on the other at the
+start of its turn (text in full, tool calls and results shortened), and the chat session's cache is re-read
+every 55 minutes so it does not expire between chats (README, "Two threads"). Estimate from the same replay:
+about $24 a day. **To watch:** `python -m ea usage` after a few days; the first chat after the restart pays one
+full rewrite (about $3 at 200k tokens) to create the fork.
+
 ## Stage 1: talking to it on this Mac (about 15 minutes, no cloud)
 
 1. Anthropic API key into `data/.env` (copy `.env.example` there first). This is the one hard blocker; no model

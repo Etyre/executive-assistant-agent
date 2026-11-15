@@ -253,10 +253,21 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 log.exception("heartbeat failed")
 
+    async def _keepalive(self) -> None:
+        """Its own loop, not part of tick(): a tick can sit in a background turn for minutes, and the chat
+        session's cache has to be re-read in the last few minutes before it expires."""
+        while True:
+            try:
+                await asyncio.to_thread(self.agent.keep_fast_warm)
+            except Exception:  # noqa: BLE001
+                log.exception("fast cache keep-alive failed")
+            await asyncio.sleep(min(30, self.s.reminder_poll_seconds))
+
     async def run(self) -> None:
         hb = self.s.heartbeat
         log.info("scheduler: %d checks configured; heartbeat %s", len(self.s.checks),
                  f"on (mean {hb.mean_minutes} min, {hb.active_start}-{hb.active_end})" if hb.enabled else "off")
+        asyncio.get_running_loop().create_task(self._keepalive())
         while True:
             try:
                 await asyncio.to_thread(self.tick)

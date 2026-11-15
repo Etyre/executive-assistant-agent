@@ -326,7 +326,7 @@ class Agent:
         try:
             final = runner.run_turn(user_text, system_text, thread, channel, mode, on_event, images=images,
                                     drain=None if isolated else self._drain_for_turn, context=thread if isolated else "main",
-                                    situation=situation, fast=fast)
+                                    situation=situation, fast=fast, msg_id=user_msg_id)
         except RateLimited as e:
             log.warning("agent sdk: %s; redoing the turn over the API", e)
             return None if self.api_provider is not None else f"(model error: {e})"
@@ -342,6 +342,26 @@ class Agent:
             self.convo.set("ended_note", self._ended)
             self._ended = None
         return final or "(no reply)"
+
+
+    def keep_fast_warm(self) -> dict[str, Any] | None:
+        """Called by the scheduler every poll: when the chat session's prompt cache is about to expire, re-read
+        it once so the next chat does not pay to rewrite the whole conversation at fast-mode prices."""
+        if self.sdk is None:
+            return None
+        from ..llm.agent_sdk import AgentSDKRunner
+        system_text = prompt.stable_block(self.settings)
+        sid = self.sdk.keepalive_due(system_text)
+        if not sid:
+            return None
+        runner = AgentSDKRunner(self.settings, self.tools, self.convo, self._emit, self.provider)
+        out = runner.keep_warm(system_text, sid)
+        if out["speed"] != "fast" or not out["cache_read"]:
+            log.warning("fast cache keep-alive did not hit the cache (speed %s, read %d, wrote %d tokens, about $%.2f)",
+                        out["speed"], out["cache_read"], out["cache_write"], out["cost_usd"])
+        else:
+            log.info("fast cache keep-alive: read %d tokens, wrote %d, about $%.2f", out["cache_read"], out["cache_write"], out["cost_usd"])
+        return out
 
 
 def _short(x: Any, n: int = 100) -> str:
