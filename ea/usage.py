@@ -206,6 +206,10 @@ def charged_today(convo: Any, tz: dt.tzinfo | None = None, now: dt.datetime | No
     return daily(convo, 1, tz, now)[-1]["charged"]
 
 
+def charged_since(convo: Any, since_ts: float) -> float:
+    return sum((r["cost_usd"] or 0.0) for r in convo.usage_rows(since_ts) if is_charged(r))
+
+
 def daily_report(convo: Any, days: int = 7, tz: dt.tzinfo | None = None, now: dt.datetime | None = None) -> str:
     rows = daily(convo, days, tz, now)
     lines = [f"Charged beyond the plan, per day (last {len(rows)} days; estimate at list prices):",

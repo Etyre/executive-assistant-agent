@@ -125,7 +125,7 @@ def test_per_day_and_component_breakdowns_and_the_agents_tool(tmp_path):
     assert not err and "Model usage by speed" in out and "Charged beyond the plan, per day" in out and "Cost by component" in out and "Cost by kind of turn" in out
 
 
-def test_scheduler_alerts_once_a_day_above_the_line_and_reviews_every_week():
+def test_scheduler_checks_spend_twice_a_day_alerts_once_and_reviews_every_week():
     from ea.scheduler.jobs import Scheduler
     config.load.cache_clear()
     s = config.load()
@@ -140,7 +140,7 @@ def test_scheduler_alerts_once_a_day_above_the_line_and_reviews_every_week():
             ran.append(next(b["text"] for b in messages[-2]["content"] if b.get("type") == "text") if isinstance(messages[-2]["content"], list) else messages[-2]["content"])
             return LLMResponse(content=[{"type": "text", "text": "noted"}], stop_reason="end_turn")
     a = Agent(s, provider=P())
-    for k in ("cost_alert_day", "cost_review_next"):
+    for k in ("cost_alert_checked", "cost_alert_sent", "cost_review_next"):
         a.convo.set(k, None)
     a.convo._conn.execute("DELETE FROM llm_usage"); a.convo._conn.commit()
     t0 = dt.datetime.now(dt.timezone.utc).astimezone(__import__("zoneinfo").ZoneInfo(s.timezone)).replace(hour=12, minute=0)
@@ -148,10 +148,13 @@ def test_scheduler_alerts_once_a_day_above_the_line_and_reviews_every_week():
     assert sched.watch_costs(t0) == [] and a.convo.get("cost_review_next") == pytest.approx((t0 + dt.timedelta(days=7)).timestamp())
     usage.record(a.convo, engine="agent_sdk", billing="subscription", model="claude-opus-5-5", mode="chat",
                  usage={"speed": "fast", "input_tokens": 1, "output_tokens": 1, "cache_creation": {"ephemeral_1h_input_tokens": 10_000_000}})   # $160
-    a.convo._conn.execute("UPDATE llm_usage SET ts = ?", (t0.timestamp() - 60,)); a.convo._conn.commit()
-    assert sched.watch_costs(t0) == ["alert"] and "[cost alert: model spend]" in ran[-1] and "$160.00" in ran[-1] and "$150 a day" in ran[-1]
-    assert sched.watch_costs(t0) == []                                               # once a day
-    assert sched.watch_costs(t0 + dt.timedelta(days=6)) == []                        # a new day, nothing spent, review not due
+    a.convo._conn.execute("UPDATE llm_usage SET ts = ?", (t0.timestamp() + 3600,)); a.convo._conn.commit()
+    assert sched.watch_costs(t0 + dt.timedelta(hours=2)) == []                       # over the line, but the next look is 12 hours after the last
+    half = t0 + dt.timedelta(hours=12)
+    assert sched.watch_costs(half) == ["alert"] and "[cost alert: model spend]" in ran[-1] and "$160.00" in ran[-1] and "$150 a day" in ran[-1]
+    assert sched.watch_costs(half + dt.timedelta(minutes=1)) == []
+    assert sched.watch_costs(t0 + dt.timedelta(hours=24)) == []                      # still inside the same 24 hours of spend: one alert, not two
+    assert sched.watch_costs(t0 + dt.timedelta(days=6)) == []                        # nothing spent since, review not due
     week = t0 + dt.timedelta(days=7, minutes=1)
     assert sched.watch_costs(week.replace(hour=3)) == []                             # due, but in the night: waits for the active window
     assert sched.watch_costs(week) == ["review"] and "[cost review: model costs, every 7 days]" in ran[-1] and "model_usage" in ran[-1]

@@ -60,7 +60,8 @@ class LLMSettings:
                                               # false = one session for everything (every speed switch rewrites the prompt cache)
     fast_keepalive_minutes: int = 55          # re-read the chat thread's prompt cache this long after its last call, so the
                                               # next chat does not pay to rewrite it (the cache lasts 60 min); 0 = off
-    cost_alert_usd_per_day: float = 150.0     # a day's charged model spend above this wakes the agent to tell the user at once (0 = off)
+    cost_alert_usd_per_day: float = 150.0     # charged model spend above this in the last 24 hours wakes the agent to tell the user (0 = off)
+    cost_alert_check_hours: float = 12.0      # ...looked at this often (twice a day), and at most one alert per 24 hours
     cost_review_days: int = 7                 # the agent reviews the model costs with the user this often (0 = off)
     fast_keepalive_max_idle_hours: int = 36   # stop the keep-alive this long after the last chat (about where it costs more than one rewrite)
     billing: str = "subscription"             # subscription (the Claude Code login) | api (the ANTHROPIC_API_KEY)
@@ -149,11 +150,11 @@ his usage credits in total and per day, what drove it (chat volume, cold starts,
 with the roughly $24 a day estimated before the change, and anything that looks wrong or worth changing. This
 check-in is always sent: do not end with no_action_needed. Add what you learn to the `model-costs` memory."""
 
-COST_ALERT_PROMPT = """Model cost alert. Today's model spend charged to the user's usage credits is about ${charged:.2f}, above the
+COST_ALERT_PROMPT = """Model cost alert. Model spend charged to the user's usage credits over the last 24 hours is about ${charged:.2f}, above the
 ${limit:.0f} a day line he asked to be told about. Read your memory `model-costs`, call model_usage, and message
 him now with send_message: the figure, what drove it (look at chat volume, cold starts and the keep-alive in the
 per-day table), and the options he has (they are in the memory; you cannot change the settings yourself). This
-alert is always sent, once a day at most: do not end with no_action_needed."""
+alert is always sent, at most once in 24 hours: do not end with no_action_needed."""
 
 OTTER_RECORDING_PROMPT = """A new Otter recording has arrived and this turn is for reading it. Do what the standing instructions say about
 recordings. In short: pull out anything actionable (tasks, deadlines, decisions, things the user asked you to

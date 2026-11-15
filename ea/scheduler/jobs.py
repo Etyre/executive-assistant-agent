@@ -204,16 +204,19 @@ class Scheduler:
 
     # ------------------------------------------------------------------ model costs
     def watch_costs(self, now: dt.datetime) -> list[str]:
-        """Two proactive turns about the agent's own model spend (Eli, 2026-11-15): an alert, once a day at most,
-        when the day's charged spend passes `llm.cost_alert_usd_per_day`, and a review every `llm.cost_review_days`.
+        """Two proactive turns about the agent's own model spend (Eli, 2026-11-15): an alert when the
+        charged spend of the last 24 hours passes `llm.cost_alert_usd_per_day`, looked at every
+        `llm.cost_alert_check_hours` (twice a day), and a review every `llm.cost_review_days`.
         Timed from the store, not from a clock time, so a sleeping Mac delays the review instead of skipping it."""
         from .. import usage
         llm, convo, ran = self.s.llm, self.agent.convo, []
-        if llm.cost_alert_usd_per_day:
-            charged = usage.charged_today(convo, self.tz, now)
-            if charged > llm.cost_alert_usd_per_day and convo.get("cost_alert_day") != now.date().isoformat():
-                convo.set("cost_alert_day", now.date().isoformat())            # before the turn: a crash must not re-fire
-                log.warning("model spend today $%.2f is above $%.0f: running the cost alert", charged, llm.cost_alert_usd_per_day)
+        if llm.cost_alert_usd_per_day and now.timestamp() - float(convo.get("cost_alert_checked") or 0) >= llm.cost_alert_check_hours * 3600:
+            convo.set("cost_alert_checked", now.timestamp())
+            charged = usage.charged_since(convo, now.timestamp() - 86400)       # a rolling day, so a check never misses the evening
+            log.info("cost check: $%.2f charged in the last 24 hours (alert above $%.0f)", charged, llm.cost_alert_usd_per_day)
+            if charged > llm.cost_alert_usd_per_day and now.timestamp() - float(convo.get("cost_alert_sent") or 0) >= 86400:
+                convo.set("cost_alert_sent", now.timestamp())                  # before the turn: a crash must not re-fire
+                log.warning("model spend $%.2f in 24 hours is above $%.0f: running the cost alert", charged, llm.cost_alert_usd_per_day)
                 self.agent.run_check("model spend", config.COST_ALERT_PROMPT.format(charged=charged, limit=llm.cost_alert_usd_per_day), kind="cost alert")
                 ran.append("alert")
         if llm.cost_review_days:
