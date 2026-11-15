@@ -115,6 +115,54 @@ def breakdown_report(convo: Any, days: int = 7, tz: dt.tzinfo | None = None, now
     return "\n".join(lines)
 
 
+GROUP_KEYS = ("day", "hour", "speed", "mode", "model", "billing", "channel", "engine", "thread", "call")
+
+
+def query(convo: Any, start: str | None = None, end: str | None = None, group_by: list[str] | None = None,
+          tz: dt.tzinfo | None = None, limit: int = 500) -> dict[str, Any]:
+    """The recorded model calls, aggregated however the caller wants. Every call is kept for good in `llm_usage`,
+    so any day since tracking began can be looked up. `start` / `end`: dates (YYYY-MM-DD, inclusive, in `tz`);
+    default the last 7 days. `group_by`: any of GROUP_KEYS, in order; "day" and "hour" are in `tz`; "call" gives
+    one row per model call (with its time). Each row has the call count, the tokens and the dollars of each of
+    the five components, the total at list prices (`usd`), what was charged beyond the plan (`charged_usd`) and
+    the number of cold starts."""
+    keys = [k for k in (group_by or ["day", "speed"]) if k in GROUP_KEYS]
+    bad = [k for k in (group_by or []) if k not in GROUP_KEYS]
+    if bad:
+        raise ValueError(f"unknown group_by {bad}; use any of {list(GROUP_KEYS)}")
+    today = dt.datetime.now(tz).date()
+    d1 = dt.date.fromisoformat(end) if end else today
+    d0 = dt.date.fromisoformat(start) if start else d1 - dt.timedelta(days=6)
+    t0 = dt.datetime.combine(d0, dt.time.min, tz).timestamp()
+    t1 = dt.datetime.combine(d1 + dt.timedelta(days=1), dt.time.min, tz).timestamp()
+    groups: dict[tuple, dict[str, Any]] = {}
+    for r in convo.usage_rows(t0):
+        if r["ts"] >= t1:
+            break
+        at = dt.datetime.fromtimestamp(r["ts"], tz)
+        vals = {"day": at.date().isoformat(), "hour": at.strftime("%Y-%m-%d %H:00"), "call": f"{at:%Y-%m-%d %H:%M:%S} #{r['id']}",
+                **{k: r[k] or "" for k in ("speed", "mode", "model", "billing", "channel", "engine", "thread")}}
+        g = groups.get(tuple(vals[k] for k in keys))
+        if g is None:
+            g = groups[tuple(vals[k] for k in keys)] = {**{k: vals[k] for k in keys}, "calls": 0, **{f"{c}_tokens": 0 for c in COMPONENTS},
+                                                       **{f"{c}_usd": 0.0 for c in COMPONENTS}, "usd": 0.0, "charged_usd": 0.0, "cold_starts": 0, "unpriced_calls": 0}
+        cc = component_costs(r["model"], r["speed"], r)
+        g["calls"] += 1
+        for c in COMPONENTS:
+            g[f"{c}_tokens"] += r[c] or 0
+            g[f"{c}_usd"] += (cc or {}).get(c, 0.0)
+        if cc is None:
+            g["unpriced_calls"] += 1
+        g["usd"] += r["cost_usd"] or 0.0
+        g["charged_usd"] += (r["cost_usd"] or 0.0) if is_charged(r) else 0.0
+        g["cold_starts"] += int(r["speed"] == "fast" and not r["cache_read"] and (r["cache_write_1h"] or 0) + (r["cache_write_5m"] or 0) >= COLD_START_TOKENS)
+    rows = [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in g.items()} for g in groups.values()]
+    first = convo.usage_first_ts()
+    return {"from": d0.isoformat(), "to": d1.isoformat(), "timezone": str(tz or "machine local"), "group_by": keys,
+            "tracking_began": dt.datetime.fromtimestamp(first, tz).isoformat(timespec="minutes") if first else None,
+            "rows": rows[-limit:], **({"note": f"{len(rows) - limit} earlier rows left out; narrow the dates or group more coarsely"} if len(rows) > limit else {})}
+
+
 def is_charged(row: dict[str, Any]) -> bool:
     """Is this call paid for beyond the subscription? Over the API key everything is; on the subscription only
     fast-mode calls are (usage credits), standard ones are covered by the plan."""

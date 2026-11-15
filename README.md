@@ -170,6 +170,9 @@ API stream events the CLI passes through (`message_start` / `message_delta`), on
 a per-day table of what was charged beyond the plan (split into chat, keep-alive and other, with the number
 and cost of *cold starts*: fast calls that rewrote the conversation to the cache instead of reading it), and
 where the money goes by component (uncached input, cache reads, cache writes, output) and by kind of turn.
+Every call is kept for good (one row each in `llm_usage`), and the agent's `model_usage_query` tool
+(`usage.query`) reads any date range grouped by any of day, hour, speed, mode, model, billing, channel,
+engine, thread or single call, with tokens and dollars per component, so it can aggregate its own way.
 
 **The agent watches its own costs (Eli, 2026-11-15).** Its memory `model-costs` (`data/memory/model-costs.md`)
 holds the background: billing, the two threads, the keep-alive, the estimate, how to read the tables, the
@@ -323,7 +326,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 127 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive, the cost alert and review)
+.venv/bin/python -m pytest -q                # 128 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive, the cost alert and review)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)

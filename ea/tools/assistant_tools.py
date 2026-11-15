@@ -14,6 +14,11 @@ from ..channels import twilio_voice
 from .registry import ToolRegistry
 
 
+def usage_keys() -> tuple[str, ...]:
+    from .. import usage
+    return usage.GROUP_KEYS
+
+
 def register(reg: ToolRegistry, store: ConversationStore, settings: config.Settings,
              send_message: Callable[[str], None], end_conversation: Callable[[str], None]) -> None:
     tz = ZoneInfo(settings.timezone)
@@ -75,6 +80,19 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
         from .. import usage
         n = max(1, min(int(days or 7), 60))
         return "\n\n".join([usage.report(store, dt.datetime.now(tz)), usage.daily_report(store, n, tz), usage.breakdown_report(store, n, tz)])
+
+    @reg.tool("model_usage_query", "Look up your recorded model calls and aggregate them your own way. Every call since "
+              "tracking began is kept (speed, kind of turn, model, tokens and cost), so any day can be looked up. Give a "
+              "date range and what to group by; each row has the number of calls, tokens and dollars for each cost "
+              "component (input, cache_read, cache_write_5m, cache_write_1h, output), the total at list prices (usd), "
+              "what was charged beyond the plan (charged_usd) and the number of cold starts.",
+              {"properties": {"start": {"type": "string", "description": "first day, YYYY-MM-DD (default: 6 days before `end`)"},
+                              "end": {"type": "string", "description": "last day, YYYY-MM-DD, inclusive (default: today)"},
+                              "group_by": {"type": "array", "items": {"type": "string", "enum": list(usage_keys())},
+                                           "description": "in order, e.g. [\"day\", \"speed\"] (the default), [\"mode\"], [\"hour\", \"mode\"]; \"call\" lists single model calls"}}})
+    def model_usage_query(start: str | None = None, end: str | None = None, group_by: list[str] | None = None) -> Any:
+        from .. import usage
+        return usage.query(store, start, end, group_by, tz)
 
     @reg.tool("no_action_needed", "End a scheduled check without messaging the user. Say briefly why (logged, not sent).",
               {"properties": {"reason": {"type": "string"}}, "required": ["reason"]})

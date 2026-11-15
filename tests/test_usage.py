@@ -156,3 +156,26 @@ def test_scheduler_alerts_once_a_day_above_the_line_and_reviews_every_week():
     assert sched.watch_costs(week.replace(hour=3)) == []                             # due, but in the night: waits for the active window
     assert sched.watch_costs(week) == ["review"] and "[cost review: model costs, every 7 days]" in ran[-1] and "model_usage" in ran[-1]
     assert sched.watch_costs(week) == []
+
+
+def test_the_agent_can_look_up_any_day_and_group_as_it_likes(tmp_path):
+    from ea.tools import assistant_tools
+    from ea.tools.registry import ToolRegistry
+    c = _store(tmp_path)
+    opus = dict(engine="agent_sdk", billing="subscription", model="claude-opus-5-5")
+    usage.record(c, **opus, mode="chat", usage={"speed": "fast", "output_tokens": 100, "cache_read_input_tokens": 100_000})
+    usage.record(c, **opus, mode="chat", usage={"speed": "fast", "output_tokens": 100, "cache_creation": {"ephemeral_1h_input_tokens": 50_000}})
+    usage.record(c, **opus, mode="proactive", usage={"output_tokens": 100, "cache_read_input_tokens": 100_000})
+    c._conn.execute("UPDATE llm_usage SET ts = ts - 40 * 86400 WHERE mode = 'proactive'"); c._conn.commit()      # 40 days ago: still there
+    reg = ToolRegistry()
+    assistant_tools.register(reg, c, config.load(), lambda t: None, lambda r: None)
+    out, err = reg.dispatch("model_usage_query", {})                                  # default: last 7 days by day and speed
+    rows = __import__("json").loads(out)["rows"]
+    assert not err and len(rows) == 1 and rows[0]["speed"] == "fast" and rows[0]["calls"] == 2 and rows[0]["cold_starts"] == 1
+    assert rows[0]["cache_read_usd"] == pytest.approx(0.04) and rows[0]["cache_write_1h_usd"] == pytest.approx(0.8) and rows[0]["charged_usd"] == pytest.approx(0.848)
+    old = (dt.date.today() - dt.timedelta(days=45)).isoformat()
+    by_mode = usage.query(c, old, None, ["mode"])["rows"]
+    assert {r["mode"]: (r["calls"], r["charged_usd"]) for r in by_mode} == {"chat": (2, 0.848), "proactive": (1, 0.0)}
+    assert len(usage.query(c, old, None, ["call"])["rows"]) == 3
+    out, err = reg.dispatch("model_usage_query", {"group_by": ["colour"]})
+    assert err and "unknown group_by" in out
