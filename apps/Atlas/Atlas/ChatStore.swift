@@ -283,7 +283,7 @@ final class ChatStore {
             // next turn) and the reply arrives on the live feed (Eli, 2026-11-06).
             Task {
                 do {
-                    let r = try await api.sendNow(text, images: images)
+                    let r = try await api.sendNow(text, images: images, messageID: meID)
                     activity = r.queued ? "the agent will see your message in its current turn" : activity
                 } catch {
                     if Self.isOffline(error) { markQueued(meID) } else { lastError = error.localizedDescription; if draft.isEmpty { draft = text } }
@@ -296,6 +296,9 @@ final class ChatStore {
 
     /// One request/reply exchange for a message already on screen. Unreachable server: the message is kept as
     /// `queued` and goes out from `flushOutbox()` when the connection is back; nothing is lost and nothing is retyped.
+    /// A request cut after the server took the message (the app was left, the signal dropped) looks the same from
+    /// here, so every send carries `meID` as its message id and the server answers a resend with the first one's
+    /// reply instead of running the message again (the agent got each message twice, Eli 2026-11-15).
     private func transmit(meID: String, text: String, images: [API.Attachment]) {
         isSending = true
         let replyID = "local-it-\(UUID().uuidString)"
@@ -304,7 +307,7 @@ final class ChatStore {
             var got = ""
             var offline = false
             do {
-                for try await ev in api.send(text, images: images) {
+                for try await ev in api.send(text, images: images, messageID: meID) {
                     switch ev {
                     case .text(let t): got += t; update(replyID, text: got)
                     case .tool(let name): activity = Self.describe(tool: name)

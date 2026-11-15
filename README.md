@@ -327,7 +327,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 128 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive, the cost alert and review)
+.venv/bin/python -m pytest -q                # 129 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive, the cost alert and review)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)
@@ -372,6 +372,14 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **A phone that leaves the app right after sending resends the message.** iOS cuts the streaming request when
+  the app goes to the background; with no reply text yet the app cannot tell "never arrived" from "arrived,
+  reply lost", queues the message and sends it again on return. The server ran it twice and the agent answered
+  twice (2026-11-15). Every send from the apps now carries `message_id` (the app's own id for that message,
+  the same on a resend); `ea/channels/web.py` keeps the last 500 in memory and answers a resend with the first
+  run's reply (log: `message ... was already received; not running it again`). A server restart between the
+  two sends forgets the ids, so that one case can still run twice.
 
 - **Fast and standard speed do not share a prompt cache, and the cache dies after an hour.** One session used
   for both rewrote the whole conversation at every switch ($3.27 for one short chat reply on 2026-11-14, with

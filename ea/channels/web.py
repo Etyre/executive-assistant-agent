@@ -7,7 +7,9 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import collections
 import secrets
+import threading
 from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request
@@ -107,6 +109,8 @@ class MessageIn(BaseModel):
     text: str = ""
     channel: str = "shortcut"
     client_id: str = ""             # the app's own id, echoed in events so it can ignore what it already shows
+    message_id: str = ""            # the app's id for this one message, the same on a resend: a message the server
+                                    # already has is not run again (the phone resends when its connection was cut)
     images: list[ImageIn] = []
 
 
@@ -171,6 +175,35 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         except ValueError as e:
             raise HTTPException(400, str(e))
 
+    # Messages already taken in, by the app's message id. The phone resends a message when the request was cut
+    # before any reply text arrived (it left the app, lost signal): it cannot know the server had it, and the
+    # agent used to get it twice (seen 2026-11-15). A resend waits for the first one's reply instead.
+    accepted: "collections.OrderedDict[str, dict[str, Any]]" = collections.OrderedDict()
+    accepted_lock = threading.Lock()
+
+    def _accept(m: "MessageIn") -> dict[str, Any] | None:
+        """None for a new message (now registered); for a resend, the first one's entry: {"done": Event, "reply"}."""
+        if not m.message_id:
+            return None
+        with accepted_lock:
+            if m.message_id in accepted:
+                log.info("message %s was already received; not running it again", m.message_id)
+                return accepted[m.message_id]
+            accepted[m.message_id] = {"done": threading.Event(), "reply": ""}
+            while len(accepted) > 500:
+                accepted.popitem(last=False)
+        return None
+
+    def _settle(m: "MessageIn", reply: str) -> None:
+        e = accepted.get(m.message_id) if m.message_id else None
+        if e is not None:
+            e["reply"] = reply
+            e["done"].set()
+
+    def _reply_of(entry: dict[str, Any]) -> str:
+        entry["done"].wait(600)
+        return entry["reply"]
+
     def _submit(m: "MessageIn", images: list[dict[str, Any]] | None = None) -> bool:
         sub = getattr(agent, "submit", None)
         return bool(sub and sub(m.text, m.channel, m.client_id, images=images))
@@ -213,10 +246,19 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         if not m.text.strip() and not m.images:
             raise HTTPException(400, "empty message")
         presence.typed()
+        dup = _accept(m)
+        if dup is not None:
+            return {"reply": await asyncio.to_thread(_reply_of, dup), "duplicate": True}
         images = _store_images(m)
         if _submit(m, images):                                        # a turn is running: it will see this
+            _settle(m, "")
             return {"reply": "", "queued": True}
-        reply = await asyncio.to_thread(agent.handle, m.text, m.channel, "chat", client_id=m.client_id, images=images)
+        try:
+            reply = await asyncio.to_thread(agent.handle, m.text, m.channel, "chat", client_id=m.client_id, images=images)
+        except BaseException:
+            _settle(m, "")
+            raise
+        _settle(m, reply)
         _finish_turn(m, reply, x_device_token)
         return {"reply": reply}
 
@@ -435,10 +477,19 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         if not m.text.strip() and not m.images:
             raise HTTPException(400, "empty message")
         presence.typed()
-        images = _store_images(m)
         loop = asyncio.get_running_loop()
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        dup = _accept(m)
+        if dup is not None:                           # a resend: the first request's turn answers it
+
+            async def again() -> AsyncIterator[bytes]:
+                yield (json.dumps({"type": "duplicate"}) + "\n").encode()
+                reply = await asyncio.to_thread(_reply_of, dup)
+                yield (json.dumps({"type": "done", "reply": reply}, ensure_ascii=False) + "\n").encode()
+            return StreamingResponse(again(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        images = _store_images(m)
         if _submit(m, images):
+            _settle(m, "")
             q.put_nowait({"type": "queued"})
             q.put_nowait({"type": "done", "reply": ""})
 
@@ -448,9 +499,11 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         def run() -> None:
             try:
                 reply = agent.handle(m.text, m.channel, "chat", on_event=emit, client_id=m.client_id, images=images)
+                _settle(m, reply)
                 emit({"type": "done", "reply": reply})
                 _finish_turn(m, reply, x_device_token)
             except Exception as e:  # noqa: BLE001 - the page shows it
+                _settle(m, "")
                 log.exception("streamed turn failed")
                 emit({"type": "error", "error": f"{type(e).__name__}: {e}"})
 

@@ -152,8 +152,9 @@ struct API {
 
     /// A message without streaming: when the agent is mid-turn the server queues it (queued = true) and the reply
     /// comes over the live feed; otherwise this waits for the reply.
-    func sendNow(_ text: String, images: [Attachment] = []) async throws -> SendResult {
-        let req = try request("api/message", method: "POST", json: ["text": text, "channel": "app", "client_id": config.clientID, "images": imagePayload(images)])
+    /// `messageID`: this message's own id, the same on every resend, so the server never runs one message twice.
+    func sendNow(_ text: String, images: [Attachment] = [], messageID: String = "") async throws -> SendResult {
+        let req = try request("api/message", method: "POST", json: ["text": text, "channel": "app", "client_id": config.clientID, "message_id": messageID, "images": imagePayload(images)])
         let (data, resp) = try await session.data(for: req)
         try check(resp, data)
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -161,12 +162,12 @@ struct API {
     }
 
     /// One chat turn, streamed: text deltas as the model writes, tool names as it looks things up, then done/error.
-    func send(_ text: String, images: [Attachment] = []) -> AsyncThrowingStream<StreamEvent, Error> {
+    func send(_ text: String, images: [Attachment] = [], messageID: String = "") -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { cont in
             let task = Task {
                 do {
                     let req = try request("api/message/stream", method: "POST",
-                                          json: ["text": text, "channel": "app", "client_id": config.clientID, "images": imagePayload(images)])
+                                          json: ["text": text, "channel": "app", "client_id": config.clientID, "message_id": messageID, "images": imagePayload(images)])
                     let (bytes, resp) = try await session.bytes(for: req)
                     try check(resp)
                     for try await line in bytes.lines {

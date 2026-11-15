@@ -122,3 +122,29 @@ def test_chat_page_script_parses(monkeypatch):
         pytest.skip("node not installed; quote check only")
     r = subprocess.run(["node", "--check", "--input-type=module", "-"], input=js, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_a_resent_message_is_not_run_twice(monkeypatch):
+    """The phone resends a message when its request was cut before any reply arrived; the same message id must
+    get the first run's reply, not a second turn (Eli saw every message answered twice, 2026-11-15)."""
+    import json
+    monkeypatch.setenv("EA_WEB_TOKEN", "t")
+    config.load.cache_clear()
+    agent = EchoAgent()
+    runs = []
+    inner = agent.handle
+    agent.handle = lambda text, *a, **k: (runs.append(text), inner(text, *a, **k))[1]
+    c = TestClient(create_app(agent, config.load()))
+    h = {"Authorization": "Bearer t"}
+    body = {"text": "only once", "channel": "app", "client_id": "phone", "message_id": "local-me-1"}
+    first = [json.loads(l) for l in c.post("/api/message/stream", json=body, headers=h).text.splitlines()]
+    again = [json.loads(l) for l in c.post("/api/message/stream", json=body, headers=h).text.splitlines()]
+    assert first[-1] == {"type": "done", "reply": "[app/chat] only once"}
+    assert again == [{"type": "duplicate"}, {"type": "done", "reply": "[app/chat] only once"}]
+    assert c.post("/api/message", json=body, headers=h).json() == {"reply": "[app/chat] only once", "duplicate": True}
+    assert runs == ["only once"]
+    # a different id, or none (the Shortcut, the web page), is a new message even with the same words
+    c.post("/api/message", json={**body, "message_id": "local-me-2"}, headers=h)
+    c.post("/api/message", json={**body, "message_id": ""}, headers=h)
+    c.post("/api/message", json={**body, "message_id": ""}, headers=h)
+    assert len(runs) == 4
