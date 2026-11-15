@@ -61,7 +61,7 @@ class LLMSettings:
     fast_keepalive_minutes: int = 55          # re-read the chat thread's prompt cache this long after its last call, so the
                                               # next chat does not pay to rewrite it (the cache lasts 60 min); 0 = off
     cost_alert_usd_per_day: float = 150.0     # charged model spend above this in the last 24 hours wakes the agent to tell the user (0 = off)
-    cost_alert_check_hours: float = 12.0      # ...looked at this often (twice a day), and at most one alert per 24 hours
+    cost_alert_check_hours: float = 1.0       # ...looked at this often (a database query, no model call), and at most one alert per 24 hours
     cost_review_days: int = 7                 # the agent reviews the model costs with the user this often (0 = off)
     fast_keepalive_max_idle_hours: int = 36   # stop the keep-alive this long after the last chat (about where it costs more than one rewrite)
     billing: str = "subscription"             # subscription (the Claude Code login) | api (the ANTHROPIC_API_KEY)

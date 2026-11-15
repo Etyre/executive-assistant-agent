@@ -140,6 +140,7 @@ def test_scheduler_checks_spend_twice_a_day_alerts_once_and_reviews_every_week()
             ran.append(next(b["text"] for b in messages[-2]["content"] if b.get("type") == "text") if isinstance(messages[-2]["content"], list) else messages[-2]["content"])
             return LLMResponse(content=[{"type": "text", "text": "noted"}], stop_reason="end_turn")
     a = Agent(s, provider=P())
+    s.llm.cost_alert_check_hours = 12
     for k in ("cost_alert_checked", "cost_alert_sent", "cost_review_next"):
         a.convo.set(k, None)
     a.convo._conn.execute("DELETE FROM llm_usage"); a.convo._conn.commit()

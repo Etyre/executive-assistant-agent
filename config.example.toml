@@ -20,7 +20,7 @@ fast_own_thread = true          # agent_sdk: chat turns on their own fast sessio
 fast_keepalive_minutes = 55     # agent_sdk: keep the chat thread's prompt cache alive between chats (a cheap cache read every 55 min; the cache lasts 60); 0 = off
 fast_keepalive_max_idle_hours = 36   # stop keeping it alive this long after your last chat
 cost_alert_usd_per_day = 150    # charged model spend above this in the last 24 hours: the agent tells you (0 = off)
-cost_alert_check_hours = 12     # ...checked this often (twice a day); at most one alert per 24 hours
+cost_alert_check_hours = 1      # ...checked this often (a database query, no model call); at most one alert per 24 hours
 cost_review_days = 7            # the agent reviews the model costs with you this often (0 = off)
 history_messages = 80
 max_tool_rounds = 20

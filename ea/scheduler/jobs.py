@@ -206,7 +206,7 @@ class Scheduler:
     def watch_costs(self, now: dt.datetime) -> list[str]:
         """Two proactive turns about the agent's own model spend (Eli, 2026-11-15): an alert when the
         charged spend of the last 24 hours passes `llm.cost_alert_usd_per_day`, looked at every
-        `llm.cost_alert_check_hours` (twice a day), and a review every `llm.cost_review_days`.
+        `llm.cost_alert_check_hours` (hourly; a query, no model call), and a review every `llm.cost_review_days`.
         Timed from the store, not from a clock time, so a sleeping Mac delays the review instead of skipping it."""
         from .. import usage
         llm, convo, ran = self.s.llm, self.agent.convo, []

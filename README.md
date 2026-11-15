@@ -178,7 +178,7 @@ engine, thread or single call, with tokens and dollars per component, so it can 
 holds the background: billing, the two threads, the keep-alive, the estimate, how to read the tables, the
 settings. `Scheduler.watch_costs` (every poll) starts two kinds of proactive turn: `[cost alert: ...]` when the
 charged spend of the last 24 hours passes `llm.cost_alert_usd_per_day` (150), looked at every
-`llm.cost_alert_check_hours` (12, so twice a day; at most one alert per 24 hours), and `[cost review: ...]`
+`llm.cost_alert_check_hours` (1; the check is a database query, no model call; at most one alert per 24 hours), and `[cost review: ...]`
 every `llm.cost_review_days` (7), both of which always message Eli. The review is timed from `cost_review_next`
 in state.db (first one 7 days after the first poll), inside the heartbeat's active window, so a sleeping Mac
 delays it instead of skipping it.
