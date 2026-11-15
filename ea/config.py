@@ -56,6 +56,8 @@ class LLMSettings:
     fast_when_chatting: bool = True           # fast mode (premium-priced) on turns where the user is waiting for the reply
                                               # (chat, voice); never on checks, wakeups, heartbeats, ingestion or workers
     # agent_sdk only:
+    fast_own_thread: bool = True              # chat (fast) turns on a session of their own, separate from background turns;
+                                              # false = one session for everything (every speed switch rewrites the prompt cache)
     fast_keepalive_minutes: int = 55          # re-read the chat thread's prompt cache this long after its last call, so the
                                               # next chat does not pay to rewrite it (the cache lasts 60 min); 0 = off
     fast_keepalive_max_idle_hours: int = 36   # stop the keep-alive this long after the last chat (about where it costs more than one rewrite)

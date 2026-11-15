@@ -16,6 +16,7 @@ max_tokens = 16000
 fallbacks = true                # Anthropic server-side refusal fallbacks (beta) - set false to disable
 thinking_display = "summarized" # the Mac app's thinking pane shows the model's reasoning summary; "omitted" hides it
 fast_when_chatting = true       # fast mode (premium price) only on turns where you are waiting for the reply (chat, voice); never on checks, wakeups, heartbeats, ingestion, workers
+fast_own_thread = true          # agent_sdk: chat turns on their own fast session, separate from background turns; false = one session for everything (dearer: each speed switch rewrites the prompt cache)
 fast_keepalive_minutes = 55     # agent_sdk: keep the chat thread's prompt cache alive between chats (a cheap cache read every 55 min; the cache lasts 60); 0 = off
 fast_keepalive_max_idle_hours = 36   # stop keeping it alive this long after your last chat
 history_messages = 80

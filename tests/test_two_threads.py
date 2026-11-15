@@ -123,3 +123,29 @@ def test_keep_alive_pings_a_fork_only_when_the_cache_is_about_to_expire(monkeypa
     assert time.time() - a.convo.get("sdk_fast_last_call") < 5 and a.keep_fast_warm() is None             # good for another hour
     row = dict(a.convo._conn.execute("SELECT mode, speed, cache_read FROM llm_usage ORDER BY id DESC LIMIT 1").fetchone())
     assert row == {"mode": "keepalive", "speed": "fast", "cache_read": 200_000}
+
+
+def test_one_thread_again_with_the_setting_off_and_nothing_is_lost(monkeypatch):
+    a = _agent()
+    calls = []
+
+    async def fake_query(*, prompt, options=None, transport=None):
+        text = await _text(prompt)
+        fast = json.loads(options.settings)["fastMode"]
+        calls.append({"text": text, "resume": options.resume, "fork": options.fork_session, "fast": fast})
+        sid = options.resume if options.resume and not options.fork_session else ("chat-session" if calls[-1]["fork"] else "bg-session")
+        yield sdk.SystemMessage(subtype="init", data={"session_id": sid, "fast_mode_state": "on" if fast else "off"})
+        yield sdk.AssistantMessage(content=[sdk.TextBlock(text=f"noted {len(calls)}")], model="m")
+        yield sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1, session_id=sid, result="noted", total_cost_usd=0)
+    monkeypatch.setattr(sdk, "query", fake_query)
+    a.run_check("morning", "look at the day")                    # 1: standard session
+    a.handle("on the chat thread", channel="app")                # 2: chat session (fork)
+    a.settings.llm.fast_own_thread = False
+    a.handle("on the one thread", channel="app")                 # 3: fast mode, but on the original session, caught up on 2
+    assert (calls[2]["resume"], calls[2]["fork"], calls[2]["fast"]) == ("bg-session", False, True)
+    assert "on the chat thread" in calls[2]["text"] and "noted 2" in calls[2]["text"]
+    assert a.keep_fast_warm() is None                            # no chat session in use: nothing to keep alive
+    a.settings.llm.fast_own_thread = True
+    a.handle("back on the chat thread", channel="app")           # 4: the chat session again, caught up on 3
+    assert (calls[3]["resume"], calls[3]["fork"]) == ("chat-session", False)
+    assert "on the one thread" in calls[3]["text"] and "noted 3" in calls[3]["text"]

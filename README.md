@@ -139,6 +139,12 @@ main conversation runs as **two sessions with the same history** (`ea/llm/agent_
   much as one rewrite, and it is skipped once the cache has already expired (the Mac was asleep). Log:
   `fast cache keep-alive: read N tokens, wrote M, about $X`; in `ea usage` these calls are fast-speed rows
   (`mode = keepalive` in `llm_usage`). `fast_keepalive_minutes = 0` turns it off.
+- **Switching back to one thread.** `llm.fast_own_thread = false` and a restart: every turn then runs on the
+  original session, which is first caught up on what the chat session did. Set it back to `true` and the chat
+  session resumes and is caught up in turn. Nothing is lost either way, because both sessions are fed from
+  the conversation store; what crosses over arrives in catch-up form (tool results shortened). With one thread
+  and `fast_when_chatting` still on, each speed switch rewrites the cache again (the dear case above);
+  `fast_when_chatting = false` as well gives one thread at standard speed, no credits spent.
 - **What the two threads do not share.** The same events reach each thread in a different form: its own turns
   whole (thinking, full tool results), the other's as the catch-up. Each thread is also compacted by the SDK
   on its own schedule, so their summaries of old history differ. Workers are unaffected (own sessions,
@@ -304,7 +310,7 @@ tail -f ~/Library/Logs/executive-assistant.log
 launchctl bootout gui/$(id -u)/com.elityre.executive-assistant        # stop
 
 # test without the real trigger
-.venv/bin/python -m pytest -q                # 124 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive)
+.venv/bin/python -m pytest -q                # 125 tests, no network, scripted model (incl. the LLM inbox on both engines, fast mode per turn kind, usage by speed, the two SDK threads and keep-alive)
 .venv/bin/python -m ea check                 # what is configured and reachable (every source probed)
 .venv/bin/python -m ea check --llm           # ...plus one real model call ("ready")
 .venv/bin/python -m ea run-check morning     # run one scheduled check by hand (or `heartbeat`)

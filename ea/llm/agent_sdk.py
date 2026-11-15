@@ -23,6 +23,9 @@ lane keeps a pointer (`sdk_seen:...`) to the last stored message it knows about;
 of everything after it (agent/catchup.py: text in full, tool calls and results as one line each). Turns that ran
 over the API during a subscription fallback are caught up the same way. The cache lasts an hour, so between
 chats `keep_warm` re-reads the fast lane's cache every `fast_keepalive_minutes` on a throwaway fork.
+`llm.fast_own_thread = false` goes back to one session: every turn then runs on the standard lane, which catches
+up on whatever the chat lane did; turning it on again, the chat lane catches up the same way. Nothing is lost
+either way, because both lanes are fed from the conversation store.
 Switch back by setting `provider = "anthropic"` in config.toml and restarting."""
 from __future__ import annotations
 
@@ -235,7 +238,7 @@ class AgentSDKRunner:
         A fast turn of the main agent runs on the chat session, everything else on the standard one (module doc).
         `msg_id`: the stored id of this turn's user message, when it was stored."""
         self._thread, self._channel, self._context, self._mode = thread, channel, context, mode
-        self._lane, self._msg_id = ("fast" if fast and context == "main" else "std"), msg_id
+        self._lane, self._msg_id = ("fast" if fast and context == "main" and self.s.llm.fast_own_thread else "std"), msg_id
         result: dict[str, Any] = {}
 
         def runner() -> None:
@@ -477,7 +480,7 @@ class AgentSDKRunner:
         call until the cache has expired anyway (pinging then would pay for the rewrite it is meant to avoid),
         and only for `fast_keepalive_max_idle_hours` after the last real chat."""
         llm, now = self.s.llm, now or time.time()
-        if not (llm.fast_keepalive_minutes and llm.fast_when_chatting and self.use_subscription_now(now)):
+        if not (llm.fast_keepalive_minutes and llm.fast_when_chatting and llm.fast_own_thread and self.use_subscription_now(now)):
             return None
         lane = f"{self.convo.current_thread()}:fast"
         sid = self.convo.get(f"sdk_session:{lane}")
