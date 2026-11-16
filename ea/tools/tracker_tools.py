@@ -125,6 +125,38 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
     def tracker_update_task(task_id: int, **fields: Any) -> Any:
         return tracker.update_task(task_id, **fields)
 
+    @reg.tool("tracker_set_task_meta", "Set a task's tags and metadata; the tracker records the change with `why` as your "
+              "signed note on the task, and the planner uses it. `tags` is the tags as the user types them, in one string: "
+              "#p1..#p5 #p0 #due:fri #today #tomorrow #nodue #soft:fri #nosoft #blocking #blocking:Name #notblocking "
+              "#onesitting #focus #task #nokind #reading #notreading #writing #notwriting (an unknown tag is refused and "
+              "nothing is applied). The same things can be given as named fields, which win over a tag: importance, "
+              "deadline (hard; '2026-11-20', 'fri', '' clears), soft_deadline (ideally by), blocking, blocking_for, "
+              "chunkable, work_kind ('task', 'focus', '' hands it back), reading, writing. estimate_minutes (0 hands it "
+              "back to the forecast) and toggl_title (the timer's name; '' hands it back). Title and description are the "
+              "user's text: tracker_update_task changes those.",
+              {"properties": {"task_id": {"type": "integer"}, "tags": {"type": "string"}, "why": {"type": "string"},
+                              "importance": {"type": "integer", "minimum": 1, "maximum": 5},
+                              "deadline": {"type": "string"}, "soft_deadline": {"type": "string"},
+                              "blocking": {"type": "boolean"}, "blocking_for": {"type": "string"}, "chunkable": {"type": "boolean"},
+                              "work_kind": {"type": "string", "enum": ["task", "focus", ""]},
+                              "reading": {"type": "boolean"}, "writing": {"type": "boolean"},
+                              "estimate_minutes": {"type": "integer", "minimum": 0, "maximum": 600}, "toggl_title": {"type": "string"}},
+               "required": ["task_id"]}, writes=True)
+    @guard
+    def tracker_set_task_meta(task_id: int, **fields: Any) -> Any:
+        return tracker.set_task_meta(task_id, **fields)
+
+    @reg.tool("tracker_set_project_meta", "Set a project's metadata: subtitle (the one line under its name; '' clears it) and "
+              "toggl_project (the Toggl project its tasks' timers are filed under; '' unlinks it). The tracker records the "
+              "change with `why` as your signed note on the project. Projects carry no tags of their own: tags belong to "
+              "tasks (tracker_set_task_meta).",
+              {"properties": {"project_id": {"type": "integer"}, "subtitle": {"type": "string"},
+                              "toggl_project": {"type": "string"}, "why": {"type": "string"}},
+               "required": ["project_id"]}, writes=True)
+    @guard
+    def tracker_set_project_meta(project_id: int, **fields: Any) -> Any:
+        return tracker.set_project_meta(project_id, **fields)
+
     @reg.tool("tracker_complete_task", "Mark a task done (or undo that).",
               {"properties": {"task_id": {"type": "integer"}, "undo": {"type": "boolean"}}, "required": ["task_id"]}, writes=True)
     @guard

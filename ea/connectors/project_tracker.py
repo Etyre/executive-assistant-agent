@@ -185,6 +185,15 @@ class ProjectTracker:
         with self._c() as c:
             return send_json(c, "POST", "/api/agent/schedule/unpin", None, date=date)
 
+    def set_task_meta(self, tid: int, **fields: Any) -> dict[str, Any]:
+        """Tags, priority, dates, estimate, timer name. "" and 0 are real values here (they clear), only None is left out."""
+        with self._c() as c:
+            return send_json(c, "PATCH", f"/api/agent/tasks/{tid}", {k: v for k, v in fields.items() if v is not None})
+
+    def set_project_meta(self, pid: int, **fields: Any) -> dict[str, Any]:
+        with self._c() as c:
+            return send_json(c, "PATCH", f"/api/agent/projects/{pid}", {k: v for k, v in fields.items() if v is not None})
+
     # ---------------------------------------------------------------- write (plain API; not covered by the agent API)
     def update_task(self, tid: int, **fields: Any) -> dict[str, Any]:
         with self._c() as c:

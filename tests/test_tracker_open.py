@@ -58,3 +58,19 @@ def test_tracker_tools_point_at_tracker_open_when_the_app_is_down(tmp_path, monk
     out, err = reg.dispatch("tracker_feed", {})
     assert not err and "tracker_open" in out and "not answering" in out
     assert "tracker_open" in reg.names()
+
+
+def test_tag_and_metadata_tools_send_what_was_given_to_the_agent_api(tmp_path, monkeypatch):
+    """An empty string and 0 are values (they clear a field); only what was not given is left out."""
+    t, _, _ = _tracker(tmp_path, monkeypatch)
+    sent = []
+    monkeypatch.setattr(pt, "send_json", lambda c, method, path, body=None, **q: sent.append((method, path, body)) or {"ok": True})
+    reg = ToolRegistry()
+    monkeypatch.setattr(tracker_tools, "ProjectTracker", lambda router, settings=None: t)
+    tracker_tools.register(reg, t.router, config.load())
+    reg.dispatch("tracker_set_task_meta", {"task_id": 7, "tags": "#p1 #reading", "estimate_minutes": 0, "toggl_title": "", "why": "asked"})
+    reg.dispatch("tracker_set_project_meta", {"project_id": 3, "subtitle": "", "toggl_project": "Writing", "why": "asked"})
+    assert sent == [
+        ("PATCH", "/api/agent/tasks/7", {"tags": "#p1 #reading", "estimate_minutes": 0, "toggl_title": "", "why": "asked"}),
+        ("PATCH", "/api/agent/projects/3", {"subtitle": "", "toggl_project": "Writing", "why": "asked"}),
+    ]
