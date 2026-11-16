@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the Mac app (Release), sign it with a stable identity, and relaunch it.
+# Build the Mac app (Release), sign it with a stable identity, install it in /Applications and relaunch it
+# (--no-launch: build and sign only).
 # A stable signature matters: macOS only grants notification permission to an app whose signature stays the same
 # between launches; ad-hoc signing (-s -) changes it on every build. Uses the Apple Development certificate Xcode
 # created for your Apple ID (free account is enough); override with ATLAS_SIGN_IDENTITY.
@@ -12,12 +13,25 @@ xcodebuild -project Atlas.xcodeproj -scheme Atlas -configuration Release -destin
   -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*Atlas/|BUILD" || true
 APP=build/Build/Products/Release/Atlas.app
 [ -d "$APP" ] || { echo "build failed"; exit 1; }
-xattr -cr "$APP"
-codesign --force --deep --options runtime -s "$IDENTITY" "$APP"
+# Sign a copy outside ~/Documents: there the file provider puts Finder attributes back on the bundle between
+# `xattr -cr` and `codesign`, and codesign then refuses it ("detritus not allowed", seen 2026-11-15).
+STAGE="$(mktemp -d)/Atlas.app"
+ditto "$APP" "$STAGE"
+xattr -cr "$STAGE"
+codesign --force --deep --options runtime -s "$IDENTITY" "$STAGE"
+codesign --verify --deep --strict "$STAGE"
 echo "signed with: $IDENTITY"
+rm -rf "$APP" && ditto "$STAGE" "$APP"   # keep the signed copy where the docs say the build is
 if [ "${1:-}" != "--no-launch" ]; then
-  pkill -f "Atlas.app/Contents/MacOS/Atlas" || true
+  # Install over the copy in /Applications (the login item) and run that one. Launching from build/ instead left
+  # /Applications three days stale, so the next login would have brought back an old app (found 2026-11-15).
+  for pid in $(pgrep -f "Atlas.app/Contents/MacOS/Atlas" || true); do kill "$pid" || true; done
   sleep 1
-  open "$APP"
-  echo "relaunched $APP"
+  if pgrep -f "Atlas.app/Contents/MacOS/Atlas" >/dev/null; then echo "the old app is still running; not replacing it"; exit 1; fi
+  INSTALLED="${ATLAS_INSTALL_DIR:-/Applications}/Atlas.app"
+  rm -rf "$INSTALLED.new" && ditto "$STAGE" "$INSTALLED.new" && rm -rf "$INSTALLED" && mv "$INSTALLED.new" "$INSTALLED"
+  codesign --verify --deep --strict "$INSTALLED"
+  open "$INSTALLED"
+  echo "installed and relaunched $INSTALLED"
 fi
+rm -rf "$(dirname "$STAGE")"

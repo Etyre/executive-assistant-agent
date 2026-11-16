@@ -13,7 +13,7 @@ The Mac app does not need Apple push to notify you: while it runs (it stays in t
 feed delivers every message and the app posts a system notification whenever the chat is not in front. So:
 
 ```
-cd apps/Atlas && ./build.sh          # xcodegen + build + sign with your Apple Development certificate + relaunch
+cd apps/Atlas && ./build.sh          # xcodegen + build + sign with your Apple Development certificate + install in /Applications + relaunch
 cp -R build/Build/Products/Release/Atlas.app /Applications/
 defaults write com.elityre.atlas baseURL "http://127.0.0.1:8800"
 defaults write com.elityre.atlas token "<EA_WEB_TOKEN>"      # moved into the Keychain on first launch

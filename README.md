@@ -284,7 +284,7 @@ stops. Only the access-token field is excluded.
 | `ea/usage.py` | Tokens and estimated cost per model call, split by speed (fast vs standard); the report behind `ea usage` |
 | `ea/workspace.py`, `ea/images.py`, `ea/integrations.py`, `ea/stt.py` | Shared documents, image attachments, integration status for `/health`, speech-to-text |
 | `instructions/` | `STANDING_INSTRUCTIONS.md`, `USER_SYSTEM_PROMPT.md`, `MEMORY_CONVENTIONS.md`, `habits/*.md` (one file per habit + README and example) |
-| `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs and relaunches the Mac app; own README) |
+| `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs, installs into /Applications and relaunches the Mac app; own README) |
 | `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: lets a cloud agent reach the Mac's local servers over Tailscale |
 | `deploy/` | `Dockerfile`, `docker-compose.yml`, `gcp/` (VM scripts + README), `macmini/` (launchd plist + `install.sh`) |
 | `ios/SHORTCUT.md` | Action button / Siri setup |
@@ -347,7 +347,7 @@ llm-inbox test                               # fake inbox message end to end (sh
 .venv/bin/python -m ea usage                 # tokens and estimated cost, fast mode vs standard; then the subscription usage readings from the CLI
 
 # the Mac app
-cd apps/Atlas && ./build.sh                  # xcodegen + build + sign + relaunch (see apps/Atlas/README.md)
+cd apps/Atlas && ./build.sh                  # xcodegen + build + sign + install in /Applications + relaunch (see apps/Atlas/README.md)
 ```
 
 The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, as login items). If the tracker is closed, the agent can start it itself (`tracker_open`).
@@ -373,6 +373,11 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 
 ## Gotchas learned
 
+- **The Mac app in /Applications went stale while a newer one ran.** `build.sh` used to relaunch the app from
+  `apps/Atlas/build/`, so the login item in /Applications stayed at the 12 Nov build for three days and would have
+  come back at the next login. `build.sh` now installs over `/Applications/Atlas.app` and launches that copy
+  (2026-11-15). It also signs a copy in a temp folder, not in `build/`: under `~/Documents` the file provider
+  puts Finder attributes back on the bundle within seconds and `codesign` refuses it ("detritus not allowed").
 - **A phone that leaves the app right after sending resends the message.** iOS cuts the streaming request when
   the app goes to the background; with no reply text yet the app cannot tell "never arrived" from "arrived,
   reply lost", queues the message and sends it again on return. The server ran it twice and the agent answered
