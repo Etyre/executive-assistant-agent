@@ -187,7 +187,7 @@ notification permission dialog). Server restarted 00:2x on the new code, still a
 ```
 cd ~/Documents/agent-coding/executive-assistant-agent
 bash deploy/macmini/install.sh                       # server under launchd, survives reboot/logout (kill the nohup `ea serve` first: pkill -f "ea serve")
-cp -R apps/Atlas/build/Build/Products/Release/Atlas.app /Applications/   # the Mac app; then System Settings -> General -> Login Items -> + Atlas
+apps/Atlas/install-auto-deploy.sh                    # the Mac app: every commit is built and installed in /Applications when the agent is idle (2026-11-16); then System Settings -> General -> Login Items -> + Atlas
 ```
 *Then System Settings → Notifications → Atlas: allow, style Alerts or Banners. Without a paid Apple account the
 Mac app is ad-hoc signed: fine for running locally; Apple push on it stays off (not needed while it runs).*
