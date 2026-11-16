@@ -22,6 +22,22 @@ python -m ea notify "hello from the terminal"                 # should appear in
 ```
 Add it to System Settings → General → Login Items so it is always running.
 
+### The installed Mac app updates itself from git
+
+`./install-auto-deploy.sh` installs the launchd agent `com.elityre.atlas-app-deploy` (`auto_deploy.py`). Every 30
+seconds it compares the committed app source (`Atlas/`, `project.yml`, `build.sh` at HEAD) with what it last
+installed. On a change it exports that commit to `~/Library/Application Support/AtlasAppDeploy/checkout`, builds
+it there with `build.sh`, waits until the server's `GET /health` no longer says `"busy": true` (no turn running, so
+no reply is being streamed into the app), then replaces `/Applications/Atlas.app` and relaunches it.
+
+- Only committed work is deployed. Uncommitted edits reach the installed app only through a manual `./build.sh`,
+  and the next commit then replaces that.
+- A failed build is logged once (`~/Library/Logs/atlas-app-deploy.log`) and not retried until the source changes;
+  `auto_deploy.py once` retries by hand.
+- A server that does not answer counts as idle. A turn that starts in the second or two between the last check
+  and the relaunch is not protected: the turn itself finishes on the server and the app reloads the history.
+- The iPhone app is not covered (`ios-auto-deploy` handles Flutter apps only); it still needs `./build-ios.sh`.
+
 Signing matters even without a paid account: macOS grants notification permission only to an app whose code
 signature is stable across launches. Ad-hoc signing (`codesign -s -`) changes it on every build and macOS then
 refuses notifications (`UNErrorDomain error 1`). `build.sh` signs with the free "Apple Development" certificate

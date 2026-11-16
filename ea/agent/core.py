@@ -91,6 +91,11 @@ class Agent:
         self.convo.append(self.convo.current_thread(), "assistant", [{"type": "text", "text": f"[sent via send_message] {text}"}],
                           channel="proactive")
 
+    @property
+    def busy(self) -> bool:
+        """A turn (chat or proactive) is running right now."""
+        return self._turn_running
+
     # ------------------------------------------------------------------ messages that arrive mid-turn
     def submit(self, text: str, channel: str = "chat", client_id: str = "", images: list[dict[str, Any]] | None = None) -> bool:
         """Called by a channel when the user sends while a turn is running: queue it and return True. The running

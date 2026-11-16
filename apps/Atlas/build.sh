@@ -25,6 +25,11 @@ rm -rf "$APP" && ditto "$STAGE" "$APP"   # keep the signed copy where the docs s
 if [ "${1:-}" != "--no-launch" ]; then
   # Install over the copy in /Applications (the login item) and run that one. Launching from build/ instead left
   # /Applications three days stale, so the next login would have brought back an old app (found 2026-11-15).
+  # ATLAS_WAIT_IDLE=1 (set by auto_deploy.py): hold the swap until the agent is not mid-turn, so a reply being
+  # streamed into the app is not cut off. A server that does not answer is not running a turn.
+  if [ "${ATLAS_WAIT_IDLE:-}" = 1 ]; then
+    while curl -s --max-time 3 "${ATLAS_HEALTH_URL:-http://127.0.0.1:8800/health}" | grep -q '"busy": *true'; do sleep 3; done
+  fi
   for pid in $(pgrep -f "Atlas.app/Contents/MacOS/Atlas" || true); do kill "$pid" || true; done
   sleep 1
   if pgrep -f "Atlas.app/Contents/MacOS/Atlas" >/dev/null; then echo "the old app is still running; not replacing it"; exit 1; fi

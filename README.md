@@ -285,6 +285,7 @@ stops. Only the access-token field is excluded.
 | `ea/workspace.py`, `ea/images.py`, `ea/integrations.py`, `ea/stt.py` | Shared documents, image attachments, integration status for `/health`, speech-to-text |
 | `instructions/` | `STANDING_INSTRUCTIONS.md`, `USER_SYSTEM_PROMPT.md`, `MEMORY_CONVENTIONS.md`, `habits/*.md` (one file per habit + README and example) |
 | `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs, installs into /Applications and relaunches the Mac app; own README) |
+| `apps/Atlas/auto_deploy.py`, `install-auto-deploy.sh` | launchd agent `com.elityre.atlas-app-deploy`: builds each new commit of the Mac app and installs it in /Applications once the agent is not mid-turn |
 | `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: lets a cloud agent reach the Mac's local servers over Tailscale |
 | `deploy/` | `Dockerfile`, `docker-compose.yml`, `gcp/` (VM scripts + README), `macmini/` (launchd plist + `install.sh`) |
 | `ios/SHORTCUT.md` | Action button / Siri setup |
@@ -301,6 +302,9 @@ stops. Only the access-token field is excluded.
 - **Config**: `config.toml` in the repo (`EA_CONFIG` overrides); prompts in `instructions/`.
 - **Secrets**: `data/.env` (mode 600) or the environment.
 - **State**: `data/` (`EA_DATA` overrides): memory, transcripts, `state.db`, `otter.db`, `roam.db`, workspace, images.
+- **Mac app auto-deploy**: agent `~/Library/LaunchAgents/com.elityre.atlas-app-deploy.plist`; state (last installed
+  source id) and the clean build folder in `~/Library/Application Support/AtlasAppDeploy/`; log
+  `~/Library/Logs/atlas-app-deploy.log`.
 - **Logs**: `~/Library/Logs/executive-assistant.log` (launchd stdout+stderr, every line timestamped). Copies
   installed before 2026-11-07 still log to `data/ea.log` until `deploy/macmini/install.sh` is rerun. The bridge
   logs to `~/Library/Logs/ea-bridge.log`.
@@ -348,6 +352,9 @@ llm-inbox test                               # fake inbox message end to end (sh
 
 # the Mac app
 cd apps/Atlas && ./build.sh                  # xcodegen + build + sign + install in /Applications + relaunch (see apps/Atlas/README.md)
+apps/Atlas/install-auto-deploy.sh            # (re)install the agent that does the above for every commit, waiting for the agent to be idle
+/opt/homebrew/bin/python3 apps/Atlas/auto_deploy.py status   # committed vs installed; `once` runs one check now (end-to-end test)
+tail -f ~/Library/Logs/atlas-app-deploy.log
 ```
 
 The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, as login items). If the tracker is closed, the agent can start it itself (`tracker_open`).

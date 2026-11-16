@@ -148,3 +148,14 @@ def test_a_resent_message_is_not_run_twice(monkeypatch):
     c.post("/api/message", json={**body, "message_id": ""}, headers=h)
     c.post("/api/message", json={**body, "message_id": ""}, headers=h)
     assert len(runs) == 4
+
+
+def test_health_says_whether_a_turn_is_running(monkeypatch):
+    """apps/Atlas/build.sh waits on this before it swaps the Mac app, so a reply being streamed is not cut off."""
+    monkeypatch.setenv("EA_WEB_TOKEN", "secret-token")
+    config.load.cache_clear()
+    agent = EchoAgent()
+    c = TestClient(create_app(agent, config.load()))
+    assert c.get("/health").json()["busy"] is False
+    agent.busy = True
+    assert c.get("/health").json()["busy"] is True

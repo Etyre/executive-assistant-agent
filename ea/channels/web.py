@@ -218,7 +218,8 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "agent": s.agent_name, "provider": agent.provider.name, "model": s.llm.model,
+        return {"ok": True, "busy": bool(getattr(agent, "busy", False)),    # a turn is running; apps/Atlas/build.sh waits on this before swapping the Mac app
+                "agent": s.agent_name, "provider": agent.provider.name, "model": s.llm.model,
                 "sources": agent.router.describe(), "push": push.describe(), "listeners": bus.subscribers,
                 "presence": presence.describe(),
                 "usage_30_days_by_speed": usage.summary(agent.convo, 30) if hasattr(agent.convo, "usage_totals") else [],   # fast vs standard: tokens, estimated cost
