@@ -7,8 +7,9 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     EA_DATA=/data EA_CONFIG=/app/config.toml EA_CONFIG_OVERLAY=/app/config.server.toml EA_SHARED_DIR=/app/shared \
     HOME=/data/home PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-# git + ssh: the Roam backup is a git checkout that is pulled every few hours.
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates tzdata curl \
+# git + ssh: the Roam backup is a git checkout that is pulled every few hours. libatomic1: the Node that Playwright
+# bundles will not start without it, and the slim image does not have it (build failed 2026-11-17).
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates tzdata curl libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
