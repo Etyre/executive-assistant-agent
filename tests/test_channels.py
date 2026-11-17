@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import json
 
 from fastapi.testclient import TestClient
 
@@ -159,3 +160,29 @@ def test_health_says_whether_a_turn_is_running(monkeypatch):
     assert c.get("/health").json()["busy"] is False
     agent.busy = True
     assert c.get("/health").json()["busy"] is True
+
+
+def test_a_message_handed_to_a_running_turn_is_done_only_once_it_is_stored(monkeypatch):
+    """The apps reload the history on "done"; told too early, they dropped the message from the screen (2026-11-16)."""
+    import threading
+    import time
+    monkeypatch.setenv("EA_WEB_TOKEN", "secret-token")
+    config.load.cache_clear()
+    agent = EchoAgent()
+    stored_at = []
+
+    def submit(text, channel, client_id, images=None, stored=None):
+        def later():
+            time.sleep(0.4)
+            stored_at.append(time.monotonic())
+            stored.set()
+        threading.Thread(target=later).start()
+        return True                                            # a turn is running: it takes the message
+    agent.submit = submit
+    c = TestClient(create_app(agent, config.load()))
+    h = {"Authorization": "Bearer secret-token"}
+    r = c.post("/api/message/stream", json={"text": "hi", "channel": "app"}, headers=h)
+    done_at = time.monotonic()
+    assert [json.loads(l)["type"] for l in r.text.splitlines()] == ["queued", "done"]
+    assert stored_at and done_at > stored_at[0]
+    assert c.post("/api/message", json={"text": "hi again", "channel": "app"}, headers=h).json() == {"reply": "", "queued": True}
