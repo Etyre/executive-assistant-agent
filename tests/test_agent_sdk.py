@@ -247,3 +247,32 @@ def test_changed_standing_prompt_restarts_the_session_with_a_recap(monkeypatch):
     assert seen[2][1].resume is None and "instructions changed" in seen[2][1].system_prompt and "one" in seen[2][1].system_prompt
     a.handle("four", channel="app")
     assert seen[3][1].resume == "sess-9"                                  # and resumes again from there
+
+
+def test_message_sent_during_a_background_turn_still_shows_in_the_chat(monkeypatch):
+    """Eli, 2026-11-16: a message typed while a heartbeat ran reached the agent but was stored under the heartbeat's
+    channel ('scheduler'), which the chat history hides, so it vanished from the app and looked unsent."""
+    import threading
+    a, s = _agent(monkeypatch)
+    stored = threading.Event()
+
+    async def fake_query(*, prompt, options=None, transport=None):
+        await prompt.__anext__()
+        yield sdk.SystemMessage(subtype="init", data={"session_id": "sess-3"})
+        yield sdk.AssistantMessage(content=[sdk.ToolUseBlock(id="tu1", name=PREFIX + "list_reminders", input={})], model="m")
+        assert a.submit("whiteboard please (sdk)", channel="app", client_id="mac", stored=stored) is True
+        assert not stored.is_set()                                       # not in the table yet: the app must not be told "done"
+        await prompt.__anext__()
+        assert stored.is_set()
+        yield sdk.UserMessage(content=[sdk.ToolResultBlock(tool_use_id="tu1", content=[{"type": "text", "text": "[]"}], is_error=False)])
+        yield sdk.AssistantMessage(content=[sdk.TextBlock(text="Done.")], model="m")
+        yield sdk.ResultMessage(subtype="success", duration_ms=10, duration_api_ms=8, is_error=False, num_turns=2, session_id="sess-3",
+                                result="Done.", total_cost_usd=0.01)
+        try:
+            await prompt.__anext__()
+        except StopAsyncIteration:
+            pass
+    monkeypatch.setattr(sdk, "query", fake_query)
+    a.run_check("heartbeat", "look around", kind="heartbeat")
+    mine = [m for m in a.convo.readable(10) if m["who"] == "me"][-1:]   # the last one: the store is shared between tests
+    assert [(m["text"], m["channel"]) for m in mine] == [("whiteboard please (sdk)", "app")]   # the heartbeat's own prompt stays hidden

@@ -347,7 +347,11 @@ class AgentSDKRunner:
                 await asyncio.sleep(0.25)
                 for m in drain():
                     stored = list(m.get("images") or []) + [{"type": "text", "text": MID_TURN_PREFIX + m["text"]}]
-                    self.convo.append(self._thread, "user", stored, self._channel)
+                    # Under the message's own channel, not the running turn's: a message typed during a heartbeat was
+                    # stored as 'scheduler', which the chat history hides, so it vanished from the app (Eli, 2026-11-16).
+                    self.convo.append(self._thread, "user", stored, m.get("channel") or self._channel)
+                    if m.get("stored") is not None:
+                        m["stored"].set()
                     state["result_seen"] = False
                     state["injected"] += 1
                     log.info("mid-turn message handed to the running turn: %s", m["text"][:100].replace("\n", " "))

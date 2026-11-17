@@ -383,6 +383,10 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 
 ## Gotchas learned
 
+- **A message typed while a background turn ran vanished from the chat and looked unsent.** The agent got it (it is
+  handed to the running turn), but it was stored under that turn's channel, `scheduler`, which the chat history
+  hides; and the server said "done" before it was stored at all, so the app's history reload dropped it from the
+  screen. Now a mid-turn message is stored under its own channel and "done" waits until it is stored (2026-11-16).
 - **Calendar writes go through an Apps Script, reads through the iCal feed, and the feed lags.** An event the agent
   just created can take minutes to show in `calendar_events`; the create result (with its `event_id`) is the proof.
   After editing `deploy/calendar_script/Code.gs`, paste it into the script project again and deploy a **new

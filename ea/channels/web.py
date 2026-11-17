@@ -10,6 +10,7 @@ import logging
 import collections
 import secrets
 import threading
+import time
 from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request
@@ -204,9 +205,24 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         entry["done"].wait(600)
         return entry["reply"]
 
-    def _submit(m: "MessageIn", images: list[dict[str, Any]] | None = None) -> bool:
+    def _submit(m: "MessageIn", images: list[dict[str, Any]] | None = None) -> threading.Event | None:
+        """Hand the message to the running turn. None when no turn is running (run it normally); otherwise an event
+        that is set once the message is stored. The apps reload the history as soon as they are told "done", and a
+        message not stored yet disappeared from the screen (Eli, 2026-11-16), so "done" waits for it."""
         sub = getattr(agent, "submit", None)
-        return bool(sub and sub(m.text, m.channel, m.client_id, images=images))
+        if not sub:
+            return None
+        stored = threading.Event()
+        try:
+            taken = sub(m.text, m.channel, m.client_id, images=images, stored=stored)
+        except TypeError:                              # an agent without the `stored` hook (tests, older fakes)
+            taken = sub(m.text, m.channel, m.client_id, images=images)
+            stored.set()
+        return stored if taken else None
+
+    def _wait_stored(stored: threading.Event) -> None:
+        stored.wait(90)                                # a long tool call can hold the turn's next step; never hang the app
+        time.sleep(0.3)                                # the hand-over to a following turn stores it a moment after the signal
 
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
@@ -251,7 +267,9 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         if dup is not None:
             return {"reply": await asyncio.to_thread(_reply_of, dup), "duplicate": True}
         images = _store_images(m)
-        if _submit(m, images):                                        # a turn is running: it will see this
+        stored = _submit(m, images)
+        if stored is not None:                                        # a turn is running: it will see this
+            await asyncio.to_thread(_wait_stored, stored)
             _settle(m, "")
             return {"reply": "", "queued": True}
         try:
@@ -489,10 +507,14 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
                 yield (json.dumps({"type": "done", "reply": reply}, ensure_ascii=False) + "\n").encode()
             return StreamingResponse(again(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         images = _store_images(m)
-        if _submit(m, images):
-            _settle(m, "")
-            q.put_nowait({"type": "queued"})
-            q.put_nowait({"type": "done", "reply": ""})
+        stored = _submit(m, images)
+        if stored is not None:
+            async def handed_over() -> AsyncIterator[bytes]:
+                yield (json.dumps({"type": "queued"}) + "\n").encode()
+                await asyncio.to_thread(_wait_stored, stored)
+                _settle(m, "")
+                yield (json.dumps({"type": "done", "reply": ""}) + "\n").encode()
+            return StreamingResponse(handed_over(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         def emit(e: dict[str, Any]) -> None:          # called from the agent's thread
             loop.call_soon_threadsafe(q.put_nowait, e)
@@ -509,7 +531,7 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
                 emit({"type": "error", "error": f"{type(e).__name__}: {e}"})
 
         async def events() -> AsyncIterator[bytes]:
-            task = asyncio.ensure_future(asyncio.to_thread(run)) if q.empty() else asyncio.ensure_future(asyncio.sleep(0))
+            task = asyncio.ensure_future(asyncio.to_thread(run))
             try:
                 while True:
                     e = await q.get()

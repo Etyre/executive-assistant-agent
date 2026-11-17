@@ -313,3 +313,31 @@ def test_message_sent_mid_turn_is_folded_into_the_running_turn(monkeypatch):
     assert [(m["who"], m["text"]) for m in said] == [("me", "do the thing"), ("me", "also, make it short"), ("it", "first reply"),
                                                      ("me", "and one more thing"), ("it", "follow-up reply")]
     assert [m["text"] for m in a.convo.readable(10)][-5:] == ["do the thing", "also, make it short", "first reply", "and one more thing", "follow-up reply"]
+
+
+def test_message_sent_during_a_background_turn_still_shows_in_the_chat(monkeypatch):
+    """The API engine's side of the 2026-11-16 bug: the row holding the user's mid-turn message was filed under the
+    background turn's channel, which the chat history hides."""
+    import threading
+    from ea import config
+    from ea.agent.core import Agent
+    from ea.llm.base import LLMResponse
+    config.load.cache_clear()
+    s = config.load()
+    s.sources.otter_logseq_graph = ""
+    stored, calls = threading.Event(), []
+
+    class P:
+        name = "scripted"
+        def __init__(self): self.agent = None
+        def complete(self, system, messages, tools, max_tokens, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                assert self.agent.submit("whiteboard please (api)", "app", "mac", stored=stored) is True
+                return LLMResponse(content=[{"type": "tool_use", "id": "t1", "name": "list_reminders", "input": {}}], stop_reason="tool_use")
+            assert stored.is_set()
+            return LLMResponse(content=[{"type": "text", "text": "noted"}], stop_reason="end_turn")
+    p = P()
+    a = Agent(s, provider=p); p.agent = a
+    a.run_check("heartbeat", "look around", kind="heartbeat")
+    assert [(m["text"], m["channel"]) for m in a.convo.readable(10) if m["who"] == "me"][-1:] == [("whiteboard please (api)", "app")]

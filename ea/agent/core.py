@@ -97,14 +97,17 @@ class Agent:
         return self._turn_running
 
     # ------------------------------------------------------------------ messages that arrive mid-turn
-    def submit(self, text: str, channel: str = "chat", client_id: str = "", images: list[dict[str, Any]] | None = None) -> bool:
+    def submit(self, text: str, channel: str = "chat", client_id: str = "", images: list[dict[str, Any]] | None = None,
+               stored: threading.Event | None = None) -> bool:
         """Called by a channel when the user sends while a turn is running: queue it and return True. The running
         turn sees it at its next step (API engine) or it starts the next turn as soon as this one ends. Returns
         False when no turn is running, so the caller should run `handle` normally."""
         with self._inbox_lock:
             if not self._turn_running:
                 return False
-            self._inbox.append({"text": text, "channel": channel, "client_id": client_id, "images": images or []})
+            # `stored` is set once the message is in the conversation table, so the channel can tell the app "done"
+            # only when a history load will show it.
+            self._inbox.append({"text": text, "channel": channel, "client_id": client_id, "images": images or [], "stored": stored})
             return True
 
     def _drain_for_turn(self) -> list[dict[str, Any]]:
@@ -169,6 +172,9 @@ class Agent:
             # Anything the user sent after the model had already finished starts the next turn right away.
             late = self._drain_inbox()
             if late:
+                for m in late:                           # the next turn stores it as its first act, milliseconds from now
+                    if m.get("stored") is not None:
+                        m["stored"].set()
                 text = "\n\n".join(m["text"] for m in late)
                 if all(m["channel"] == "worker" for m in late):          # only worker results: a proactive turn, no reply to the user
                     self.handle("[worker results]\n" + text + "\n\nDecide what to do with these results: act on them, remember what "
@@ -284,7 +290,8 @@ class Agent:
                     log.info("tool %s(%s) -> %s%s", tu["name"], _short(tu.get("input")), "ERROR " if err else "", _short(out, 160))
                     self._emit(kind="tool_result", id=tu["id"], name=tu["name"], output=_clip(out, 1500), error=bool(err))
                     results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": out, "is_error": err})
-                for m in (self._drain_inbox() if is_main else []):  # the user wrote while you were working: hand it over now
+                folded = self._drain_inbox() if is_main else []
+                for m in folded:                                    # the user wrote while you were working: hand it over now
                     for b in m.get("images", []):
                         results.append(b)
                     results.append({"type": "text", "text": MID_TURN_PREFIX + m["text"]})
@@ -293,7 +300,13 @@ class Agent:
                     log.info("mid-turn message folded in: %s", _short(m["text"]))
                     if m["channel"] != "worker":             # the user is now waiting on what was a background turn
                         fast = self.settings.llm.fast_when_chatting
-                self.convo.append(thread, "user", results, channel)
+                # A row that carries something the user typed is filed under that message's channel, so the chat history
+                # shows it even when the turn it landed in is a background one (channel 'scheduler' is hidden there).
+                typed = [m for m in folded if m["channel"] != "worker"]
+                self.convo.append(thread, "user", results, typed[-1]["channel"] if typed else channel)
+                for m in folded:
+                    if m.get("stored") is not None:
+                        m["stored"].set()
                 messages.append({"role": "user", "content": self.images.inflate_messages([{"role": "user", "content": results}])[0]["content"]})
                 if any(tu["name"] == "no_action_needed" for tu in resp.tool_uses):
                     # Terminal by definition: the check is over. Otherwise the model can keep re-declaring it until
