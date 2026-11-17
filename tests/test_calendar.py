@@ -88,6 +88,8 @@ def _writable(monkeypatch, answer):
 
     monkeypatch.setattr(cal_mod.httpx, "post", lambda url, json=None, **kw: sent.append((url, json)) or R())
     c = cal_mod.Calendar(s, tracker=None)
+    c.urls = ["https://calendar.google.com/calendar/ical/personal123%40group.calendar.google.com/private-abc/basic.ics"]
+    monkeypatch.setattr(c, "_fetch", lambda url, max_age=600: b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-CALNAME:Personal\r\nEND:VCALENDAR\r\n")
     reg = ToolRegistry()
     data_tools.register(reg, ServiceRouter(s), Toggl(s), Exercise(s), c)
     return reg, c, sent
@@ -98,9 +100,12 @@ def test_create_sends_local_times_with_the_app_timezone_offset(monkeypatch):
     c._cache["feed"] = (0.0, b"old")
     out, err = reg.dispatch("calendar_create_event", {"title": "Dentist", "start": "2026-11-20T15:00", "end": "2026-11-20T16:00", "calendar": "Personal"})
     assert not err and "abc@google.com" in out
-    assert sent == [("https://script.example/exec", {"token": "tok", "action": "create", "title": "Dentist", "calendar": "Personal",
+    # the calendar's name became its id, read out of the feed's address: the script's narrow permission cannot list calendars
+    assert sent == [("https://script.example/exec", {"token": "tok", "action": "create", "title": "Dentist", "calendar_id": "personal123@group.calendar.google.com",
                                                     "start": "2026-11-20T15:00:00-08:00", "end": "2026-11-20T16:00:00-08:00"})]
-    assert c._cache == {}                               # the next read refetches the feed
+    out, _ = reg.dispatch("calendar_create_event", {"title": "X", "date": "2026-11-21", "calendar": "Nope"})
+    assert "no calendar named 'Nope'" in out and "Personal" in out and len(sent) == 1
+    assert "feed" not in c._cache                       # the next read refetches the feed
     reg.dispatch("calendar_create_event", {"title": "Trip", "date": "2026-11-21", "end_date": "2026-11-23"})
     assert sent[-1][1] == {"token": "tok", "action": "create", "title": "Trip", "date": "2026-11-21", "end_date": "2026-11-23"}
     out, _ = reg.dispatch("calendar_create_event", {"title": "No time"})
@@ -112,8 +117,9 @@ def test_update_and_delete_name_the_event_by_id_and_day(monkeypatch):
     reg.dispatch("calendar_update_event", {"event_id": "abc@google.com", "date": "2026-11-20", "start": "2026-11-20T17:00", "title": "Dentist (moved)"})
     reg.dispatch("calendar_delete_event", {"event_id": "abc@google.com", "date": "2026-11-20"})
     assert [b for _, b in sent] == [
-        {"token": "tok", "action": "update", "event_id": "abc@google.com", "date": "2026-11-20", "start": "2026-11-20T17:00:00-08:00", "title": "Dentist (moved)"},
-        {"token": "tok", "action": "delete", "event_id": "abc@google.com", "date": "2026-11-20"}]
+        {"token": "tok", "action": "update", "event_id": "abc@google.com", "day_start": "2026-11-20T00:00:00-08:00", "day_end": "2026-11-21T00:00:00-08:00",
+         "start": "2026-11-20T17:00:00-08:00", "title": "Dentist (moved)"},
+        {"token": "tok", "action": "delete", "event_id": "abc@google.com", "day_start": "2026-11-20T00:00:00-08:00", "day_end": "2026-11-21T00:00:00-08:00"}]
 
 
 def test_a_refusal_from_the_script_reaches_the_agent_in_its_own_words(monkeypatch):

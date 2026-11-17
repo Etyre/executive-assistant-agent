@@ -5,7 +5,9 @@ OAuth). `CALENDAR_ICS_URLS` holds them, comma- or newline-separated; the same UR
 Changes (create, update, delete) go to a Google Apps Script web app that runs as the user
 (`deploy/calendar_script/`): `CALENDAR_WRITE_URL` is its /exec address and `CALENDAR_WRITE_TOKEN` the shared
 secret. Without both, the calendar is read-only. The script, not this file, holds the hard rules (no guests are
-ever added; an event with other guests is not changed)."""
+ever added; an event with other guests is not changed), and it is authorised only for events on calendars the
+user owns (Google's calendar.events.owned scope). That scope cannot list calendars, so a calendar is named to the
+script by its id, which this file reads out of the iCal feed's own address."""
 from __future__ import annotations
 
 import datetime as dt
@@ -47,8 +49,42 @@ class Calendar:
             t = t.replace(tzinfo=ZoneInfo(self.timezone))
         return t.isoformat()
 
-    def write(self, action: str, **fields: Any) -> dict[str, Any]:
-        """One change through the Apps Script. Raises SourceError with the script's own words when it refuses."""
+    def calendars(self) -> list[dict[str, str]]:
+        """The calendars behind the feeds: [{name, id}]. A Google feed address is .../ical/<calendar id>/private-.../basic.ics."""
+        import re
+        from urllib.parse import unquote
+        out = []
+        for i, url in enumerate(self.urls):
+            m = re.search(r"/ical/([^/]+)/", url)
+            try:
+                name = str(icalendar.Calendar.from_ical(self._fetch(url)).get("X-WR-CALNAME", "") or "").strip()
+            except (SourceError, ValueError):
+                name = ""
+            out.append({"name": name or f"calendar {i + 1}", "id": unquote(m.group(1)) if m else ""})
+        return out
+
+    def _calendar_id(self, calendar: str | None) -> str | None:
+        """None = the user's main calendar. A name from the feeds becomes that calendar's id; an id passes through."""
+        if not calendar:
+            return None
+        known = self.calendars()
+        for c in known:
+            if calendar.strip().lower() in (c["name"].lower(), c["id"].lower()) and c["id"]:
+                return c["id"]
+        if "@" in calendar:
+            return calendar.strip()
+        raise SourceError(f"no calendar named '{calendar}'; the ones in the feeds: {', '.join(c['name'] for c in known) or 'none'}")
+
+    def write(self, action: str, calendar: str | None = None, date: str | None = None, **fields: Any) -> dict[str, Any]:
+        """One change through the Apps Script. `calendar` is a feed's calendar name (or an id); `date`, for update
+        and delete, is the day the event is on now. Raises SourceError with the script's own words when it refuses."""
+        if action in ("update", "delete"):
+            day = dt.datetime.combine(dt.date.fromisoformat(date or ""), dt.time(), ZoneInfo(self.timezone))
+            fields.update(day_start=day.isoformat(), day_end=(day + dt.timedelta(days=1)).isoformat())
+        elif date:
+            fields["date"] = date
+        if self.can_write():
+            fields["calendar_id"] = self._calendar_id(calendar)
         if not self.can_write():
             raise SourceError("calendar write access is not set up: CALENDAR_WRITE_URL and CALENDAR_WRITE_TOKEN are not both set "
                               "(deploy/calendar_script/Code.gs has the steps; the user has to deploy it)")

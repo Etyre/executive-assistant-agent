@@ -2,10 +2,15 @@
  * Atlas -> Google Calendar, write access. A web app the agent posts to; it runs as you, so no OAuth client or
  * Google Cloud project is needed. The agent still READS through the iCal feeds; this is only for changes.
  *
+ * Permission: the one narrowest Google scope that allows this, calendar.events.owned ("See, create, change, and
+ * delete events on Google calendars you own"). Not calendars you only subscribe to, not sharing, not settings,
+ * not your email address. It is set in appsscript.json; the script uses the Calendar API (the "Calendar" advanced
+ * service) because the simpler CalendarApp only works with full calendar access.
+ *
  * Setup (once):
  *  1. https://script.google.com -> New project. Paste this file over Code.gs.
  *  2. Project Settings (gear) -> tick "Show appsscript.json manifest file", then paste appsscript.json (alongside
- *     this file) over the one in the editor. It limits the script to Calendar.
+ *     this file) over the one in the editor.
  *  3. Project Settings -> Script Properties -> add CALENDAR_TOKEN = the value of CALENDAR_WRITE_TOKEN in the
  *     agent's data/.env   (copy it with: grep '^CALENDAR_WRITE_TOKEN=' data/.env | cut -d= -f2 | pbcopy)
  *  4. Deploy -> New deployment -> Web app. Execute as: Me. Who has access: Anyone. Authorise when asked.
@@ -13,21 +18,20 @@
  *  5. After editing this script: Deploy -> Manage deployments -> Edit -> New version.
  *
  * Rules built in here, not only in the agent:
- *  - It never adds guests, so it never sends an invitation.
- *  - It refuses to change or delete an event that has guests other than you (they could be notified, and the
- *    event is partly theirs). Do those by hand.
- *  - It only touches calendars you own.
+ *  - It never adds guests and never asks Google to send updates, so it never sends an invitation or a notice.
+ *  - It refuses to change or delete an event that has guests other than you (the event is partly theirs).
  *
  * Request: POST, JSON body {token, action, ...}. Times are ISO with an offset ("2026-11-20T15:00:00-08:00");
  * all-day events use dates ("2026-11-20"; end_date is the last day, inclusive).
- *   calendars                                                  -> the calendars you own
- *   create  {title, start, end | date [, end_date], calendar?, location?, description?}
- *   update  {event_id, date, calendar?, title?, start?, end?, location?, description?}   (date: the day it is on now)
- *   delete  {event_id, date, calendar?}
- * `calendar` is a calendar's name; left out, your default calendar. For a repeating event, `date` picks the one
- * occurrence that is changed or deleted; the rest of the series stays.
+ *   create  {title, start, end | date [, end_date], calendar_id?, location?, description?}
+ *   update  {event_id, day_start, day_end, calendar_id?, title?, start?, end?, location?, description?}
+ *   delete  {event_id, day_start, day_end, calendar_id?}
+ * calendar_id: a calendar's id (its address, as in its iCal feed URL); left out, your main calendar. event_id is
+ * the iCal id the feeds give. day_start/day_end bound the day the event is on now: for a repeating event they pick
+ * the one occurrence that is changed or deleted; the rest of the series stays.
  */
 var P = PropertiesService.getScriptProperties();
+var QUIET = {sendUpdates: 'none'};
 
 function json(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 
@@ -37,8 +41,7 @@ function doPost(e) {
   var want = P.getProperty('CALENDAR_TOKEN');
   if (!want || p.token !== want) return json({error: 'bad token'});
   try {
-    if (p.action === 'calendars') return json({calendars: CalendarApp.getAllOwnedCalendars().map(function (c) {
-      return {name: c.getName(), default: c.isMyPrimaryCalendar(), timezone: c.getTimeZone()}; })});
+    if (p.action === 'ping') return json({ok: true});
     if (p.action === 'create') return json(create(p));
     if (p.action === 'update') return json(update(p));
     if (p.action === 'delete') return json(remove(p));
@@ -46,66 +49,68 @@ function doPost(e) {
   } catch (err) { return json({error: String(err && err.message || err)}); }
 }
 
-function calendarFor(p) {
-  if (!p.calendar) return CalendarApp.getDefaultCalendar();
-  var owned = CalendarApp.getAllOwnedCalendars().filter(function (c) { return c.getName() === p.calendar; });
-  if (!owned.length) throw new Error('no calendar you own is named "' + p.calendar + '"');
-  return owned[0];
-}
+function cal(p) { return p.calendar_id || 'primary'; }
+function isDay(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s || ''); }
+function when(s) { if (!s || isNaN(new Date(s))) throw new Error('time must be ISO with an offset, got ' + s); return s; }
+function dayAfter(s) { var d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); }
+function dayBefore(s) { var d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); }
 
-function day(s) { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); if (!m) throw new Error('date must be YYYY-MM-DD, got ' + s); return new Date(+m[1], +m[2] - 1, +m[3]); }
-function when(s) { var d = new Date(s); if (!s || isNaN(d)) throw new Error('time must be ISO with an offset, got ' + s); return d; }
-function nextDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1); }
-
-function describe(ev, cal) {
-  return {event_id: ev.getId(), calendar: cal.getName(), title: ev.getTitle(), all_day: ev.isAllDayEvent(),
-          start: ev.isAllDayEvent() ? Utilities.formatDate(ev.getAllDayStartDate(), cal.getTimeZone(), 'yyyy-MM-dd') : ev.getStartTime().toISOString(),
-          end: ev.isAllDayEvent() ? Utilities.formatDate(new Date(ev.getAllDayEndDate().getTime() - 86400000), cal.getTimeZone(), 'yyyy-MM-dd') : ev.getEndTime().toISOString(),
-          location: ev.getLocation(), repeating: ev.isRecurringEvent()};
+function describe(ev) {
+  var allDay = !!(ev.start && ev.start.date);
+  return {event_id: ev.iCalUID, title: ev.summary || '', all_day: allDay,
+          start: allDay ? ev.start.date : ev.start.dateTime, end: allDay ? dayBefore(ev.end.date) : ev.end.dateTime,
+          location: ev.location || '', repeating: !!(ev.recurringEventId || ev.recurrence), link: ev.htmlLink || ''};
 }
 
 function create(p) {
   if (!p.title) throw new Error('title is required');
-  var cal = calendarFor(p), opts = {location: p.location || '', description: p.description || ''}, ev;
+  var body = {summary: p.title, location: p.location || '', description: p.description || ''};
   if (p.date) {
-    ev = p.end_date && p.end_date !== p.date ? cal.createAllDayEvent(p.title, day(p.date), nextDay(day(p.end_date)), opts)
-                                             : cal.createAllDayEvent(p.title, day(p.date), opts);
+    if (!isDay(p.date) || (p.end_date && !isDay(p.end_date))) throw new Error('date and end_date must be YYYY-MM-DD');
+    body.start = {date: p.date};
+    body.end = {date: dayAfter(p.end_date || p.date)};          // the API's end date is the day after the last day
   } else {
-    var s = when(p.start), e = when(p.end);
-    if (e <= s) throw new Error('end must be after start');
-    ev = cal.createEvent(p.title, s, e, opts);
+    if (new Date(when(p.end)) <= new Date(when(p.start))) throw new Error('end must be after start');
+    body.start = {dateTime: p.start};
+    body.end = {dateTime: p.end};
   }
-  return {created: describe(ev, cal)};
+  return {created: describe(Calendar.Events.insert(body, cal(p), QUIET))};
 }
 
-/** The occurrence of event_id on `date` (for a one-off event, the event itself). */
+/** The occurrence of event_id inside [day_start, day_end) (for a one-off event, the event itself). */
 function find(p) {
   if (!p.event_id) throw new Error('event_id is required');
-  var cal = calendarFor(p), d = day(p.date);
-  var hits = cal.getEvents(d, nextDay(d)).filter(function (ev) { return ev.getId() === p.event_id; });
-  if (!hits.length) throw new Error('no event with that id on ' + p.date + ' in "' + cal.getName() + '" (is it on another calendar or day?)');
-  var ev = hits[0], me = Session.getEffectiveUser().getEmail();
-  var others = ev.getGuestList().filter(function (g) { return g.getEmail() !== me; });
+  var hits = [], page;
+  do {
+    var r = Calendar.Events.list(cal(p), {timeMin: when(p.day_start), timeMax: when(p.day_end), singleEvents: true,
+                                          maxResults: 250, pageToken: page});
+    hits = hits.concat((r.items || []).filter(function (ev) { return ev.iCalUID === p.event_id; }));
+    page = r.nextPageToken;
+  } while (page && !hits.length);
+  if (!hits.length) throw new Error('no event with that id on that day in this calendar (is it on another calendar or day?)');
+  var ev = hits[0];
+  var others = (ev.attendees || []).filter(function (a) { return !a.self; });
   if (others.length) throw new Error('this event has ' + others.length + ' other guest(s); change it by hand so they are not surprised');
-  return {cal: cal, ev: ev};
+  return ev;
 }
 
 function update(p) {
-  var f = find(p), ev = f.ev, was = describe(ev, f.cal);
-  if (p.title !== undefined) ev.setTitle(p.title);
-  if (p.location !== undefined) ev.setLocation(p.location);
-  if (p.description !== undefined) ev.setDescription(p.description);
+  var ev = find(p), was = describe(ev), body = {};
+  if (p.title !== undefined) body.summary = p.title;
+  if (p.location !== undefined) body.location = p.location;
+  if (p.description !== undefined) body.description = p.description;
   if (p.start !== undefined || p.end !== undefined) {
-    if (ev.isAllDayEvent()) throw new Error('this is an all-day event; delete it and create a timed one instead');
-    var s = p.start !== undefined ? when(p.start) : ev.getStartTime(), e = p.end !== undefined ? when(p.end) : ev.getEndTime();
-    if (e <= s) throw new Error('end must be after start');
-    ev.setTime(s, e);
+    if (ev.start.date) throw new Error('this is an all-day event; delete it and create a timed one instead');
+    var s = p.start !== undefined ? when(p.start) : ev.start.dateTime, e = p.end !== undefined ? when(p.end) : ev.end.dateTime;
+    if (new Date(e) <= new Date(s)) throw new Error('end must be after start');
+    body.start = {dateTime: s};
+    body.end = {dateTime: e};
   }
-  return {updated: describe(ev, f.cal), was: was};
+  return {updated: describe(Calendar.Events.patch(body, cal(p), ev.id, QUIET)), was: was};
 }
 
 function remove(p) {
-  var f = find(p), was = describe(f.ev, f.cal);
-  f.ev.deleteEvent();
+  var ev = find(p), was = describe(ev);
+  Calendar.Events.remove(cal(p), ev.id, QUIET);
   return {deleted: was};   // Google keeps deleted events in the calendar's Trash for 30 days
 }

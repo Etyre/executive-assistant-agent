@@ -97,13 +97,15 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
                 return {"error": str(e)}
         return inner
 
-    @reg.tool("calendar_writable", "The calendars you can change (the ones the user owns), with which is the default.")
+    @reg.tool("calendar_writable", "The calendars in the user's feeds, by name. You can change events only on the ones "
+              "the user owns (his own calendars, not ones he merely subscribes to); the rest are refused by Google.")
     @guard_cal
     def calendar_writable() -> Any:
-        return calendar.write("calendars")
+        return {"can_write": calendar.can_write(), "calendars": [c["name"] for c in calendar.calendars()],
+                "default": "omit `calendar` for the user's main calendar"}
 
     @reg.tool("calendar_create_event", "Put an event on the user's Google Calendar. Timed: start and end. All day: date "
-              "(and end_date, the last day, for several days). `calendar` is a name from calendar_writable; omit it for "
+              "(and end_date, the last day, for several days). `calendar` is a calendar name as calendar_events shows it; omit it for "
               "the default calendar. No guests can be added, so nothing is ever sent to anyone. The result has the "
               "event_id; calendar_events may take some minutes to show the new event.",
               {"properties": {"title": {"type": "string"}, "start": WHEN, "end": WHEN,
