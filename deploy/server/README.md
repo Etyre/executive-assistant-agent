@@ -118,5 +118,7 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
   stops with exit code 127 and no useful message unless built with `--progress=plain`.
 - **First value wins in a `.env` file**: `env` writes `data/server.env` before `data/.env` so the server's values
   override.
+- **`tracker_close` through the bridge** (`POST /mac/close-tracker`) stops the tracker's launcher and then its
+  Python by PID; stopping Python alone makes the launcher start it again.
 - `tests/test_bridge.py` fails when the tracker connector gains a write the bridge does not allow; add it to
   `WRITE_ALLOW` in `bridge/mac_bridge.py` and reinstall the bridge.

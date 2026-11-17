@@ -173,3 +173,12 @@ def test_documents_can_be_read_from_many_threads_at_once():
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+def test_agent_can_show_and_hide_the_thinking_pane():
+    from ea.tools.registry import ToolRegistry
+    from ea.tools import workspace_tools
+    reg, events = ToolRegistry(), []
+    workspace_tools.register(reg, _ws(), ui=events.append)
+    assert not reg.dispatch("thinking_pane", {"show": False})[1] and not reg.dispatch("thinking_pane", {"show": True})[1]
+    assert events == [{"action": "hide_activity"}, {"action": "show_activity"}]

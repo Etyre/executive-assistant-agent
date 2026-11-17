@@ -50,6 +50,12 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
     def tracker_open() -> Any:
         return tracker.launch()
 
+    @reg.tool("tracker_close", "Quit the Project Tracker app on the Mac (the opposite of tracker_open). Its window, menu bar "
+              "item and running timer go with it, and your tracker and calendar tools stop working until tracker_open. "
+              "Only when the user asks for it.", writes=True)
+    def tracker_close() -> Any:
+        return tracker.quit()
+
     @reg.tool("tracker_outline", "The open project/task outline as indented text: '* Project (project ID)' lines and "
               "'- [task ID] title due.. pN BLOCKING ~Nm' lines, with any notes you attached. Use the IDs in other tools.")
     @guard

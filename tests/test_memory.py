@@ -65,3 +65,22 @@ def test_archive(tmp_path):
 def test_slugify():
     assert slugify("Hello, World! 2026") == "hello-world-2026"
     assert slugify("!!!") == "memory"
+
+
+def test_restore_is_the_opposite_of_archive(tmp_path):
+    from ea.tools.registry import ToolRegistry
+    from ea.tools import memory_tools
+    s = MemoryStore(tmp_path)
+    s.write("Carpet", "the carpet guy comes Tuesday", name="carpet")
+    reg = ToolRegistry(); memory_tools.register(reg, s, lambda: "test")
+    assert reg.dispatch("memory_archive", {"name": "carpet"})[0] == "archived" and s.search("carpet guy") == []
+    import json
+    listed = json.loads(reg.dispatch("memory_archived", {})[0])
+    assert [a["name"] for a in listed] == ["carpet"] and listed[0]["title"] == "Carpet"
+    assert json.loads(reg.dispatch("memory_restore", {"name": "carpet"})[0]) == {"restored": "carpet", "title": "Carpet"}
+    assert s.read("carpet")["body"] == "the carpet guy comes Tuesday" and s.search("carpet guy") and s.archived() == []
+    assert "no archived memory" in reg.dispatch("memory_restore", {"name": "carpet"})[0]
+    # never overwrites an active memory of the same name
+    s.archive("carpet"); s.write("Carpet", "a newer note", name="carpet")
+    assert "already exists" in reg.dispatch("memory_restore", {"name": "carpet"})[0]
+    assert s.read("carpet")["body"] == "a newer note" and len(s.archived()) == 1

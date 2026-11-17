@@ -7,6 +7,7 @@ only, and wants the token in an `X-Bridge-Token` header. It does these things an
   /focus/...         -> Focus Monitor    127.0.0.1:8790   (GET only)
   /bandit/...        -> Sleep Bandit     127.0.0.1:8777   (GET only)
   POST /mac/open-tracker   starts the Project Tracker app when its API is down
+  POST /mac/close-tracker  quits it (launcher and Python)
   POST /inbox              appends an LLM-inbox record written on the server to this Mac's inbox, so `llm-inbox`
                            and the page on :8798 show it (the promise in the shared preamble is kept from here)
   GET  /documents          the Markdown files in config.toml's [[document_roots]] (name, size, modified time), and
@@ -26,6 +27,7 @@ import os
 import pathlib
 import re
 import secrets
+import signal
 import subprocess
 import sys
 import tomllib
@@ -125,6 +127,27 @@ def open_tracker(request: Request) -> dict:
     subprocess.run(["open", "-g", str(TRACKER_APP)], check=True, timeout=15)     # -g: do not take Eli's focus
     log.info("opened %s", TRACKER_APP.name)
     return {"ok": True, "opened": TRACKER_APP.name}
+
+
+@app.post("/mac/close-tracker")
+def close_tracker(request: Request) -> dict:
+    """Quit the tracker app: its launcher first (shortest command line), then the Python it would restart."""
+    _auth(request)
+    out = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout
+    found = []
+    for line in out.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if cmd.strip().startswith(str(TRACKER_APP) + "/Contents/MacOS/"):
+            found.append((len(cmd.strip()), int(pid)))
+    if not found:
+        raise HTTPException(404, "the tracker app is not running from its app bundle")
+    for _, pid in sorted(found):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    log.info("quit %s (pids %s)", TRACKER_APP.name, [p for _, p in sorted(found)])
+    return {"ok": True, "closed": TRACKER_APP.name}
 
 
 @app.post("/inbox")

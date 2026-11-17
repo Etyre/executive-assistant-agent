@@ -186,3 +186,18 @@ def test_documents_are_listed_served_and_mirrored_with_their_exact_times(bridge,
             from ea.connectors.http import SourceError
             raise SourceError("Eli's Mac is not reachable")
     assert docs_mirror.sync(s, Away()) == {"fetched": 0, "removed": 0} and (copy / "a.md").exists()   # Mac asleep: the copy stays
+
+
+def test_close_tracker_stops_launcher_then_python(bridge, tmp_path, monkeypatch):
+    c = TestClient(bridge.app)
+    H = {"X-Bridge-Token": "brtok"}
+    app = tmp_path / "Project Tracker.app"
+    monkeypatch.setattr(bridge, "TRACKER_APP", app)
+    ps = f" 78 {app}/Contents/MacOS/ProjectTrackerApp -m tracker app\n 70 {app}/Contents/MacOS/ProjectTracker\n  1 /sbin/launchd\n"
+    monkeypatch.setattr(bridge.subprocess, "run", lambda cmd, **k: type("R", (), {"stdout": ps})())
+    killed = []
+    monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: killed.append(pid))
+    assert c.post("/mac/close-tracker").status_code == 401 and killed == []
+    assert c.post("/mac/close-tracker", headers=H).json()["ok"] and killed == [70, 78]
+    ps = "  1 /sbin/launchd\n"
+    assert c.post("/mac/close-tracker", headers=H).status_code == 404

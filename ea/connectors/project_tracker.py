@@ -10,7 +10,9 @@ for the agent: the user ticks it, so there is deliberately no write path to it h
 from __future__ import annotations
 
 import datetime as dt
+import os
 import pathlib
+import signal
 import subprocess
 import time
 from typing import Any
@@ -21,6 +23,18 @@ from .. import config
 from .http import ServiceRouter, SourceError, get_json, send_json
 
 SCHEDULE_KINDS = ("task", "routine", "exercise", "journal", "break", "meeting", "checklist")
+
+
+def app_pids(app: pathlib.Path) -> list[int]:
+    """The processes running out of an app bundle, the one with the shortest command line first: for the tracker
+    that is its launcher (no arguments), which must stop before the Python it would otherwise restart."""
+    out = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout
+    found = []
+    for line in out.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if cmd.strip().startswith(str(app) + "/Contents/MacOS/"):
+            found.append((len(cmd.strip()), int(pid)))
+    return [pid for _, pid in sorted(found)]
 
 
 class ProjectTracker:
@@ -66,6 +80,33 @@ class ProjectTracker:
             return {"ok": False, "error": f"tracker app not found at {app}; set sources.tracker_app"}
         subprocess.run(["open", "-g", str(app)], check=True, timeout=15)
         return self._wait_running(wait_seconds, app.name)
+
+    def quit(self, wait_seconds: float = 15.0) -> dict[str, Any]:
+        """Quit the Project Tracker app (the opposite of launch). Its API, menu bar item and timer go with it. The
+        app is a native launcher plus the Python it runs, and the launcher restarts Python when Python alone dies,
+        so both are stopped, launcher first (the tracker's README, "quit both")."""
+        if not self.running():
+            return {"ok": True, "status": "already closed"}
+        if self.router.bridge:
+            try:
+                self.router.mac("POST", "/mac/close-tracker")
+            except SourceError as e:
+                return {"ok": False, "error": str(e)}
+        else:
+            pids = app_pids(pathlib.Path(self.app_path).expanduser())
+            if not pids:
+                return {"ok": False, "error": "the tracker's API answers but it was not started from its app; quit it from its menu bar item"}
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+        t0 = time.time()
+        while time.time() - t0 < wait_seconds:
+            if not self.running():
+                return {"ok": True, "status": "closed", "seconds": round(time.time() - t0, 1)}
+            time.sleep(1)
+        return {"ok": False, "error": f"asked the Project Tracker to quit but its API still answers after {wait_seconds:.0f}s"}
 
     def _wait_running(self, wait_seconds: float, name: str) -> dict[str, Any]:
         t0 = time.time()

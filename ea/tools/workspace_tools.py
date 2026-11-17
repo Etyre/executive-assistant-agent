@@ -8,7 +8,7 @@ from .registry import ToolRegistry
 
 
 def register(reg: ToolRegistry, ws: Workspace, show: "callable | None" = None, docs: "Documents | None" = None,
-             hide: "callable | None" = None) -> None:
+             hide: "callable | None" = None, ui: "callable | None" = None) -> None:
     """`show(doc)` (set by the server) asks every open app to bring that document up in the workspace pane;
     `hide()` asks them to close the pane."""
     def _show(name: str = "workspace") -> None:
@@ -88,6 +88,15 @@ def register(reg: ToolRegistry, ws: Workspace, show: "callable | None" = None, d
             return {"error": "no app is connected to close it in"}
         hide()
         return "workspace pane closed in the app"
+
+    @reg.tool("thinking_pane", "Show or hide the thinking pane in the user's app (the pane that lists your reasoning and "
+              "tool calls beside the chat). `show`: true to open it, false to close it. Use when the user asks.",
+              {"properties": {"show": {"type": "boolean"}}, "required": ["show"]}, writes=False)
+    def thinking_pane(show: bool) -> Any:
+        if ui is None:
+            return {"error": "no app is connected"}
+        ui({"action": "show_activity" if show else "hide_activity"})
+        return f"thinking pane {'shown' if show else 'hidden'} in the app"
 
     # ---------------------------------------------------------------- documents beyond the whiteboard
     if docs is not None:

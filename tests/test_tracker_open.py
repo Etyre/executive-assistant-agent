@@ -82,3 +82,30 @@ def test_tag_and_metadata_tools_send_what_was_given_to_the_agent_api(tmp_path, m
         ("PATCH", "/api/agent/tasks/7", {"tags": "#p1 #reading", "estimate_minutes": 0, "toggl_title": "", "why": "asked"}),
         ("PATCH", "/api/agent/projects/3", {"subtitle": "", "toggl_project": "Writing", "why": "asked"}),
     ]
+
+
+def test_quit_stops_the_launcher_before_the_python_it_would_restart(tmp_path, monkeypatch):
+    t, app, _ = _tracker(tmp_path, monkeypatch)
+    ps = f"  11 /sbin/launchd\n  78 {app}/Contents/MacOS/ProjectTrackerApp -m tracker app\n  70 {app}/Contents/MacOS/ProjectTracker\n"
+    monkeypatch.setattr(pt.subprocess, "run", lambda cmd, **k: type("R", (), {"stdout": ps})())
+    killed = []
+    monkeypatch.setattr(pt.os, "kill", lambda pid, sig: killed.append(pid))
+    pings = iter([True, True, False])
+    monkeypatch.setattr(t, "running", lambda: next(pings))
+    out = t.quit()
+    assert out["ok"] and out["status"] == "closed" and killed == [70, 78]
+    monkeypatch.setattr(t, "running", lambda: False)
+    assert t.quit()["status"] == "already closed" and killed == [70, 78]
+
+
+def test_quit_through_the_bridge_and_as_a_tool(tmp_path, monkeypatch):
+    import json
+    t, app, _ = _tracker(tmp_path, monkeypatch, bridge="http://mac:8799")
+    reg = ToolRegistry()
+    tr = tracker_tools.register(reg, t.router, config.load())
+    calls = []
+    monkeypatch.setattr(tr.router, "mac", lambda method, path, **k: calls.append((method, path)))
+    pings = iter([True, False])
+    monkeypatch.setattr(tr, "running", lambda: next(pings))
+    out, err = reg.dispatch("tracker_close", {})
+    assert not err and json.loads(out)["status"] == "closed" and calls == [("POST", "/mac/close-tracker")]

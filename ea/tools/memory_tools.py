@@ -58,3 +58,18 @@ def register(reg: ToolRegistry, store: MemoryStore, channel_getter) -> None:
               {"properties": {"name": {"type": "string"}}, "required": ["name"]}, writes=True)
     def memory_archive(name: str) -> Any:
         return "archived" if store.archive(name) else f"no memory named {name!r}"
+
+    @reg.tool("memory_archived", "List the archived memories (name, the day each was archived, title), newest first. "
+              "They are out of memory_search and memory_list; memory_restore brings one back.")
+    def memory_archived() -> Any:
+        return store.archived()
+
+    @reg.tool("memory_restore", "Bring an archived memory back into the active set (the opposite of memory_archive). "
+              "Takes the latest archived copy unless `archived_on` (YYYY-MM-DD, from memory_archived) says which.",
+              {"properties": {"name": {"type": "string"}, "archived_on": {"type": "string"}}, "required": ["name"]}, writes=True)
+    def memory_restore(name: str, archived_on: str | None = None) -> Any:
+        try:
+            m = store.restore(name, archived_on)
+        except ValueError as e:
+            return {"error": str(e)}
+        return {"restored": m["name"], "title": m["title"]} if m else f"no archived memory named {name!r} (see memory_archived)"

@@ -67,7 +67,8 @@ class Agent:
         self.workers = WorkerPool(self, max_workers=self.settings.llm.max_workers)
         worker_tools.register(self.tools, self.workers)
         workspace_tools.register(self.tools, self.workspace, show=lambda name="workspace": self.ui and self.ui({"action": "show_workspace", "doc": name}),
-                                 hide=lambda: self.ui and self.ui({"action": "hide_workspace"}), docs=self.documents)
+                                 hide=lambda: self.ui and self.ui({"action": "hide_workspace"}), docs=self.documents,
+                                 ui=lambda e: self.ui and self.ui(e))
         memory_tools.register(self.tools, self.memory, lambda: self._channel)
         assistant_tools.register(self.tools, self.convo, self.settings, self._send_outbound, self._end_conversation)
         contact.register(self.tools)                          # the model can reach Eli (shared LLM inbox)

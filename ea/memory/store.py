@@ -163,6 +163,28 @@ class MemoryStore:
         self._conn.commit()
         return True
 
+    def archived(self) -> list[dict[str, Any]]:
+        """Archived memories, newest first: name, archived_on, title, file. A name archived on several days is listed once per day."""
+        out = []
+        for p in (self.dir / "_archive").glob("*.md"):
+            name, _, day = p.stem.rpartition(".")
+            if name:
+                out.append({"name": name, "archived_on": day, "title": self.parse(p.read_text(), name)["title"], "file": p.name})
+        return sorted(out, key=lambda a: (a["archived_on"], a["name"]), reverse=True)
+
+    def restore(self, name: str, archived_on: str | None = None) -> Memory | None:
+        """Bring an archived memory back into the active set (the latest archived copy unless a day is given).
+        Raises ValueError when an active memory already has that name: nothing is ever overwritten."""
+        copies = [a for a in self.archived() if a["name"] == name and archived_on in (None, a["archived_on"])]
+        if not copies:
+            return None
+        if self._path(name).exists():
+            raise ValueError(f"an active memory named {name!r} already exists; archive or rename it first")
+        (self.dir / "_archive" / copies[0]["file"]).rename(self._path(name))
+        mem = self.parse(self._path(name).read_text(), name, self._path(name))
+        self._index_one(mem)
+        return mem
+
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         """Full-text search; falls back to a prefix/OR query when the raw query is not valid FTS syntax."""
         q = query.strip()
