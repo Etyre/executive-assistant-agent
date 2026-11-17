@@ -1,5 +1,7 @@
 # Running the agent on a server
 
+**Live since 2026-11-17** on a DigitalOcean droplet (ssh host `atlas-server`), at `http://atlas.tail5a9488.ts.net:8800`.
+
 Built 2026-11-17 so the agent keeps answering, keeps its schedule and keeps reading new recordings while the
 Mac is shut. Everything is driven from the Mac with one script, `deploy/server/atlas-server.sh`.
 
@@ -116,6 +118,9 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
   night while the Mac is awake, that is where to look.
 - **Playwright's bundled Node needs `libatomic1`**, which `python:3.12-slim` lacks; without it the image build
   stops with exit code 127 and no useful message unless built with `--progress=plain`.
+- **A space after the `=` in `data/server.env`** stays in the value; the token line must have none.
+- **DigitalOcean said "ssh key with fingerprint already exists"** and still did not list the key until the page
+  was reloaded; the key was there. AWS Lightsail on a long-unused account has a vCPU quota of 0.
 - **First value wins in a `.env` file**: `env` writes `data/server.env` before `data/.env` so the server's values
   override.
 - **`tracker_close` through the bridge** (`POST /mac/close-tracker`) stops the tracker's launcher and then its

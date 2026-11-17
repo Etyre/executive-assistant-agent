@@ -364,23 +364,18 @@ Built and tested on the Mac side on 2026-11-17; guide: `deploy/server/README.md`
 the rewritten Mac bridge (installed under launchd as `com.elityre.ea-bridge`, verified against the real tracker,
 Focus Monitor and Sleep Bandit), the document copy and the LLM-inbox relay through it, `config.server.toml`.
 
-**Needs Eli, in this order:**
-1. Rent the server (Ubuntu 24.04, 2 CPUs, 4 GB, 40 GB, US West, your ssh key, backups on) and give Claude its
-   address. Claude then runs `provision`, `deploy`, `env`, `check`.
-2. During `provision`: open the Tailscale address it prints (adds the server to your network), and add the
-   printed public key as a read-only deploy key on the Roam backup repository on GitHub.
-3. `claude setup-token` in a terminal, token into `data/server.env` as `CLAUDE_CODE_OAUTH_TOKEN=...`.
-4. Say go for `cutover --yes`; then set the URL in the iPhone app.
+**Done 2026-11-17: the agent runs on the server.** A DigitalOcean droplet (San Francisco, 2 CPUs, 4 GB, weekly
+backups; ssh host `atlas-server` in `~/.ssh/config`), reached at `http://atlas.tail5a9488.ts.net:8800` over
+Tailscale. AWS Lightsail was tried first and refused (the account's vCPU quota was 0). `provision`, `deploy`,
+`env`, `check` and `cutover --yes` all ran as written; the subscription token answered from the server; the
+saved sessions were copied; push is configured there. The Mac's launchd job is disabled; `back-to-mac --yes`
+reverses it. The Mac app points at the server; the iPhone app (updated the same day) needs the URL set by hand.
 
-**Verified on the Mac in a container, 2026-11-17** (image built from HEAD, scratch state): runs as a non-root
-user with the bundled Claude CLI; headless Chromium works; `ea check --llm` read the tracker, calendar, Focus
-Monitor, Sleep Bandit, Oura and Toggl through the bridge on its Tailscale address and got a model reply; a saved
-session resumed after its folder was renamed (what cutover does); `serve` came up healthy, refused a request
-without the token, and copied all 34 documents from the Mac.
-
-**Not yet verified** (needs the server): provisioning, the `tailscale serve` forward, the move itself with the
-real sessions, the bridge reached from another machine (and whether the night block lets it through between
-00:00 and 06:00), the subscription token (the container test used the API key).
+**Open after the move:**
+- The night block (00:00-06:00) refuses Tailscale addresses from the Mac, so the Mac app cannot reach the agent
+  in those hours (the phone can). Whether it also stops the server reaching the bridge then is untested. Exempting
+  it is Eli's decision.
+- `back-to-mac` has not been run.
 
 **Still on the Mac afterwards:** the Project Tracker, Focus Monitor and Sleep Bandit. With the Mac shut the agent
 answers, keeps its schedule, reads Otter/Roam/calendar/sheets and pushes to the phone, but cannot read or change
