@@ -18428,6 +18428,9 @@
       });
     }
   });
+  function search(config) {
+    return config ? [searchConfigFacet.of(config), searchExtensions] : searchExtensions;
+  }
   var SearchQuery = class {
     /**
     Create a query object.
@@ -26452,6 +26455,112 @@
     }
   });
 
+  // src/merge.js
+  function diffLines(a, b) {
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const A = a.slice(pre, a.length - suf), B = b.slice(pre, b.length - suf);
+    const N = A.length, M = B.length;
+    if (!N && !M) return [];
+    const whole = [{ aStart: pre, aEnd: pre + N, bStart: pre, bEnd: pre + M }];
+    if (!N || !M) return whole;
+    const max = N + M, off = max + 1;
+    const MAX_D = 2e3;
+    const trace = [];
+    const v = new Int32Array(2 * max + 3);
+    let found = false;
+    for (let d = 0; d <= max && !found; d++) {
+      if (d > MAX_D) return whole;
+      trace.push(v.slice());
+      for (let k = -d; k <= d; k += 2) {
+        let x2 = k === -d || k !== d && v[off + k - 1] < v[off + k + 1] ? v[off + k + 1] : v[off + k - 1] + 1;
+        let y2 = x2 - k;
+        while (x2 < N && y2 < M && A[x2] === B[y2]) {
+          x2++;
+          y2++;
+        }
+        v[off + k] = x2;
+        if (x2 >= N && y2 >= M) {
+          found = true;
+          break;
+        }
+      }
+    }
+    const matches = [];
+    let x = N, y = M;
+    for (let d = trace.length - 1; d >= 0; d--) {
+      const vd = trace[d];
+      const k = x - y;
+      const prevK = k === -d || k !== d && vd[off + k - 1] < vd[off + k + 1] ? k + 1 : k - 1;
+      const prevX = vd[off + prevK], prevY = prevX - prevK;
+      while (x > prevX && y > prevY) {
+        x--;
+        y--;
+        matches.push([x, y]);
+      }
+      if (d > 0) {
+        x = prevX;
+        y = prevY;
+      }
+    }
+    matches.reverse();
+    const hunks = [];
+    let pa = 0, pb = 0;
+    for (const [ma, mb] of matches) {
+      if (ma > pa || mb > pb) hunks.push({ aStart: pre + pa, aEnd: pre + ma, bStart: pre + pb, bEnd: pre + mb });
+      pa = ma + 1;
+      pb = mb + 1;
+    }
+    if (N > pa || M > pb) hunks.push({ aStart: pre + pa, aEnd: pre + N, bStart: pre + pb, bEnd: pre + M });
+    return hunks;
+  }
+  var CONFLICT_START = "<<<<<<< yours (unsaved in editor)";
+  var CONFLICT_MID = "======= theirs (on disk)";
+  var CONFLICT_END = ">>>>>>> end of conflict";
+  var isConflictMarker = (line) => line === CONFLICT_START || line === CONFLICT_MID || line === CONFLICT_END;
+  function merge3(base2, ours, theirs) {
+    const ho = diffLines(base2, ours).map((h) => ({ ...h, side: "o" }));
+    const ht = diffLines(base2, theirs).map((h) => ({ ...h, side: "t" }));
+    const all = [...ho, ...ht].sort((p, q) => p.aStart - q.aStart || p.aEnd - q.aEnd);
+    const clusters = [];
+    for (const h of all) {
+      const c = clusters[clusters.length - 1];
+      const empty2 = (r) => r.aStart === r.aEnd;
+      if (c && (h.aStart < c.aEnd || h.aStart === c.aEnd && empty2(h) && empty2(c))) {
+        c.aEnd = Math.max(c.aEnd, h.aEnd);
+        c.hunks.push(h);
+        h.cluster = c;
+      } else {
+        const nc = { aStart: h.aStart, aEnd: h.aEnd, hunks: [h] };
+        clusters.push(nc);
+        h.cluster = nc;
+      }
+    }
+    const delta = (h) => h.bEnd - h.bStart - (h.aEnd - h.aStart);
+    const mapPos = (hunks, L, c, isEnd) => hunks.reduce((p, h) => {
+      if (h.cluster === c) return isEnd ? p + delta(h) : p;
+      return h.aEnd < L || h.aEnd === L && (h.aStart < L || !isEnd) ? p + delta(h) : p;
+    }, L);
+    const edits = [];
+    let conflicts = 0;
+    for (const c of clusters) {
+      const hasO = c.hunks.some((h) => h.side === "o"), hasT = c.hunks.some((h) => h.side === "t");
+      if (!hasT) continue;
+      const oS = mapPos(ho, c.aStart, c, false), oE = mapPos(ho, c.aEnd, c, true);
+      const tS = mapPos(ht, c.aStart, c, false), tE = mapPos(ht, c.aEnd, c, true);
+      const theirLines = theirs.slice(tS, tE);
+      if (!hasO) {
+        edits.push({ from: oS, to: oE, lines: theirLines });
+        continue;
+      }
+      conflicts++;
+      edits.push({ from: oS, to: oE, lines: [CONFLICT_START, ...ours.slice(oS, oE), CONFLICT_MID, ...theirLines, CONFLICT_END] });
+    }
+    return { edits, conflicts };
+  }
+
   // src/renderer.js
   var api = window.literal;
   var INDENT = "  ";
@@ -26665,6 +26774,7 @@
     for (const { from, to } of view2.visibleRanges) {
       for (let p = from; p <= to; ) {
         const l = doc2.lineAt(p);
+        if (isConflictMarker(l.text)) decos.push(lineCls("lm-conflict").range(l.from));
         const m = /^[ \t]+/.exec(l.text);
         if (m && m[0].length < l.text.length) {
           let cols = 0;
@@ -26727,8 +26837,7 @@
               if (shown) decos.push(mark(name2 === "URL" ? "lm-url" : "lm-mark").range(a, b));
               else replace2(a, b, hide);
             }
-            return false;
-          } else if (n === "Autolink" || n === "URL") {
+          } else if (n === "Autolink" || n === "URL" && !/^(Link|Image)$/.test(node.node.parent?.name)) {
             decos.push(mark("lm-link").range(node.from, node.to));
           } else if (n === "Escape") {
             hideMark(node.from, node.from + 1, inside(node.from, node.to));
@@ -26812,6 +26921,39 @@
     decorations: (v) => v.decorations,
     provide: (plugin) => EditorView.atomicRanges.of((view2) => view2.plugin(plugin)?.atomic || Decoration.none)
   });
+  var selectHiddenPrefix = EditorState.transactionFilter.of((tr) => {
+    if (!tr.selection || tr.docChanged || !view) return tr;
+    const plugin = view.plugin(rendered);
+    if (!plugin) return tr;
+    const doc2 = tr.startState.doc;
+    const prefixEnd = (lineFrom) => {
+      let p = lineFrom, moved = true;
+      while (moved) {
+        moved = false;
+        plugin.atomic.between(p, p, (a, b) => {
+          if (a === p && b > p) {
+            p = b;
+            moved = true;
+          }
+        });
+      }
+      return p;
+    };
+    const fix = (pos) => {
+      const line = doc2.lineAt(pos);
+      const end = prefixEnd(line.from);
+      return end > line.from && pos === end ? line.from : pos;
+    };
+    let changed = false;
+    const ranges = tr.newSelection.ranges.map((r) => {
+      if (r.empty || doc2.lineAt(r.from).number === doc2.lineAt(r.to).number) return r;
+      const anchor = fix(r.anchor), head = fix(r.head);
+      if (anchor === r.anchor && head === r.head) return r;
+      changed = true;
+      return EditorSelection.range(anchor, head);
+    });
+    return changed ? [tr, { selection: EditorSelection.create(ranges, tr.newSelection.mainIndex) }] : tr;
+  });
   var LIST_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]+)(\[[ xX]\][ \t]+)?(.*)$/;
   function insertNewline(view2) {
     const { state } = view2;
@@ -26850,11 +26992,15 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
         from = a;
         to = b;
       }
-      const before = state.doc.sliceString(Math.max(0, from - n), from);
-      const after = state.doc.sliceString(to, to + n);
       const text = state.doc.sliceString(from, to);
-      if (before === wrap && after === wrap) {
-        return { changes: [{ from: from - n, to: from }, { from: to, to: to + n }], range: EditorSelection.range(from - n, to - n) };
+      const onlyMarks = (str) => /^[*_]*$/.test(str);
+      for (let k = 0; k <= 4; k++) {
+        const a = from - k - n, b = to + k;
+        if (a < 0 || b + n > state.doc.length) break;
+        if (!onlyMarks(state.doc.sliceString(from - k, from)) || !onlyMarks(state.doc.sliceString(to, b))) break;
+        if (state.doc.sliceString(a, a + n) === wrap && state.doc.sliceString(b, b + n) === wrap) {
+          return { changes: [{ from: a, to: a + n }, { from: b, to: b + n }], range: EditorSelection.range(from - n, to - n) };
+        }
       }
       if (text.startsWith(wrap) && text.endsWith(wrap) && text.length >= 2 * n) {
         return { changes: { from, to, insert: text.slice(n, -n) }, range: EditorSelection.range(from, to - 2 * n) };
@@ -26887,6 +27033,9 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
     return true;
   }
   var viewMode = new Compartment();
+  var spell = new Compartment();
+  var spellAttrs = (on) => EditorView.contentAttributes.of({ spellcheck: on ? "true" : "false", autocorrect: "off", autocapitalize: "off" });
+  var spellOn = true;
   var view;
   var theme2 = EditorView.theme({
     "&": { height: "100%", fontSize: "17px", backgroundColor: "transparent" },
@@ -26904,12 +27053,34 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
   var current = { file: null, folder: null, savedText: "" };
   var preferRaw = false;
   var dirty = false;
+  var FIND_DRAFT_KEY = "literal.find";
+  function loadFindDraft() {
+    try {
+      const s = localStorage.getItem(FIND_DRAFT_KEY);
+      return s ? JSON.parse(s) : null;
+    } catch {
+      return null;
+    }
+  }
+  function saveFindDraft(q) {
+    const draft = { search: q.search, replace: q.replace, caseSensitive: q.caseSensitive, regexp: q.regexp, wholeWord: q.wholeWord };
+    try {
+      localStorage.setItem(FIND_DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+    }
+  }
+  function withFindDraft(state) {
+    const draft = loadFindDraft();
+    if (!draft || typeof draft.search !== "string") return state;
+    return state.update({ effects: setSearchQuery.of(new SearchQuery(draft)) }).state;
+  }
   function makeState(text) {
-    return EditorState.create({
+    return withFindDraft(EditorState.create({
       doc: text,
       extensions: [
         theme2,
         history(),
+        search(),
         drawSelection(),
         dropCursor(),
         highlightActiveLine(),
@@ -26919,8 +27090,34 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
         EditorState.tabSize.of(2),
         markdown({ base: markdownLanguage, addKeymap: false }),
         viewMode.of(rendered),
+        spell.of(spellAttrs(spellOn)),
+        selectHiddenPrefix,
         keymap.of([
           { key: "Enter", run: insertNewline },
+          // Ctrl-b / Ctrl-i alongside the menu's ⌘B / ⌘I (listed before defaultKeymap, which binds Ctrl-b to cursor-left on macOS).
+          // The menu's ⌘B / ⌘I / ⌘/ are bound here too: CodeMirror's defaultKeymap gives Mod-i to
+          // selectParentSyntax (which selected the whole paragraph) and Mod-/ to toggleComment, and a key
+          // the editor handles never reaches the menu.
+          { key: "Mod-b", run: (v) => {
+            toggleWrap(v, "**");
+            return true;
+          } },
+          { key: "Mod-i", run: (v) => {
+            toggleWrap(v, "_");
+            return true;
+          } },
+          { key: "Mod-/", run: () => {
+            toggleRaw();
+            return true;
+          } },
+          { key: "Ctrl-b", run: (v) => {
+            toggleWrap(v, "**");
+            return true;
+          } },
+          { key: "Ctrl-i", run: (v) => {
+            toggleWrap(v, "_");
+            return true;
+          } },
           { key: "Tab", run: indentMore },
           { key: "Shift-Tab", run: indentLess },
           ...searchKeymap,
@@ -26930,6 +27127,7 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
         EditorView.updateListener.of((u) => {
           if (u.docChanged) setDirty(u.state.doc.toString() !== current.savedText);
           if (u.docChanged || u.selectionSet) updateStatus();
+          for (const tr of u.transactions) for (const ef of tr.effects) if (ef.is(setSearchQuery)) saveFindDraft(ef.value);
         }),
         EditorView.domEventHandlers({
           click(e) {
@@ -26945,7 +27143,7 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
           }
         })
       ]
-    });
+    }));
   }
   function linkUrlAt(pos) {
     const tree2 = syntaxTree(view.state);
@@ -26983,6 +27181,7 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
     const text = await api.readFile(file);
     current.file = file;
     current.savedText = text;
+    notice("");
     view.setState(makeState(text));
     dirty = false;
     api.setDirty(false, file);
@@ -26999,6 +27198,10 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
   async function openFile(file, newWindow = false) {
     if (file === current.file && !newWindow) return;
     const kind = await api.probeFile(file);
+    if (kind === "dir") {
+      await loadFolder(file);
+      return;
+    }
     if (kind === "missing") {
       await refreshFolder();
       return;
@@ -27021,6 +27224,7 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
     current.savedText = text;
     setDirty(false);
     api.notifySaved();
+    notice("");
     return true;
   }
   async function saveAs() {
@@ -27040,6 +27244,62 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
     else await refreshFolder();
     markActive();
     return true;
+  }
+  var merging = null;
+  async function mergeFromDisk(file) {
+    if (merging) {
+      merging = "again";
+      return;
+    }
+    merging = "busy";
+    try {
+      let text;
+      try {
+        text = await api.readFile(file);
+      } catch {
+        return;
+      }
+      if (file !== current.file || text === current.savedText) return;
+      const base2 = current.savedText.split("\n");
+      const ours = view.state.doc.toString().split("\n");
+      const theirs = text.split("\n");
+      const { edits, conflicts } = merge3(base2, ours, theirs);
+      const changes = edits.map((e) => lineEditToChange(view.state.doc, e));
+      current.savedText = text;
+      view.dispatch({ changes, annotations: Transaction.addToHistory.of(false), userEvent: "disk" });
+      setDirty(view.state.doc.toString() !== text);
+      if (conflicts) notice(`Changed on disk: ${conflicts} conflict${conflicts > 1 ? "s" : ""} marked in the text`, true);
+      else notice(dirty ? "Changed on disk: merged with your edits" : "Reloaded from disk");
+    } finally {
+      const again = merging === "again";
+      merging = null;
+      if (again) mergeFromDisk(file);
+    }
+  }
+  function lineEditToChange(doc2, e) {
+    const text = e.lines.join("\n");
+    const n = doc2.lines;
+    if (e.from === e.to) {
+      if (e.from >= n) return { from: doc2.length, insert: "\n" + text };
+      return { from: doc2.line(e.from + 1).from, insert: text + "\n" };
+    }
+    const from = doc2.line(e.from + 1).from, to = doc2.line(e.to).to;
+    if (!e.lines.length) {
+      if (e.to < n) return { from, to: doc2.line(e.to + 1).from };
+      if (e.from > 0) return { from: doc2.line(e.from).to, to };
+      return { from, to };
+    }
+    return { from, to, insert: text };
+  }
+  var noticeTimer = null;
+  function notice(text, sticky = false) {
+    const el = $("status-notice");
+    el.textContent = text;
+    el.classList.toggle("warn", sticky);
+    clearTimeout(noticeTimer);
+    if (!sticky) noticeTimer = setTimeout(() => {
+      el.textContent = "";
+    }, 6e3);
   }
   var tree = { cache: /* @__PURE__ */ new Map(), expanded: /* @__PURE__ */ new Set() };
   var isMarkdown = (f) => /\.(md|markdown)$/i.test(f);
@@ -27078,8 +27338,13 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
       const li = document.createElement("li");
       const open = tree.expanded.has(d.path);
       li.className = "dir" + (open ? " open" : "");
+      li.dataset.path = d.path;
       li.title = d.path;
       const rw = row(li, depth, () => toggleDir(d.path));
+      rw.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        rowMenu(d.path, true);
+      });
       const chev = document.createElement("span");
       chev.className = "chev";
       rw.appendChild(chev);
@@ -27100,6 +27365,10 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
       li.dataset.path = f.path;
       li.title = f.path;
       const rw = row(li, depth, (e) => openFile(f.path, e.metaKey || e.ctrlKey));
+      rw.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        rowMenu(f.path, false);
+      });
       const name2 = document.createElement("span");
       name2.className = "name";
       name2.textContent = f.name;
@@ -27140,6 +27409,105 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
     for (const d of tree.expanded) await loadDir(d);
     renderTree();
   }
+  var renaming = null;
+  async function rowMenu(p, isDir) {
+    const choice = await api.sidebarMenu(p, isDir);
+    if (choice === "rename") startRename(p);
+    else if (choice === "new-window") api.openInNewWindow(p);
+    else if (choice === "reveal") api.reveal(p);
+  }
+  function startRename(p, done) {
+    if (renaming) return;
+    const li = $("file-list").querySelector(`li[data-path="${CSS.escape(p)}"]`);
+    const nameEl = li && li.querySelector(":scope > .row > .name");
+    if (!nameEl) return;
+    const old = nameEl.textContent;
+    const input = document.createElement("input");
+    input.className = "rename";
+    input.value = old;
+    input.spellcheck = false;
+    nameEl.replaceWith(input);
+    renaming = { path: p, input };
+    const dot2 = old.lastIndexOf(".");
+    input.focus();
+    input.setSelectionRange(0, dot2 > 0 ? dot2 : old.length);
+    const finish = async (commit) => {
+      if (!renaming || renaming.input !== input) return;
+      renaming = null;
+      const name2 = input.value.trim();
+      if (commit && name2 && name2 !== old) await renameEntry(p, name2);
+      else renderTree();
+      if (done) done();
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => finish(true));
+    for (const ev of ["click", "mousedown", "dblclick", "contextmenu"]) input.addEventListener(ev, (e) => e.stopPropagation());
+  }
+  async function newDocument() {
+    if (renaming) return;
+    if (dirty && !await api.confirmDiscard()) return;
+    let file;
+    if (current.folder) {
+      const inTree = current.file && current.file.startsWith(current.folder + "/");
+      const r = await api.createFile(inTree ? current.file.slice(0, current.file.lastIndexOf("/")) : current.folder);
+      if (r.error) {
+        notice(r.error);
+        return;
+      }
+      file = r.path;
+    } else {
+      file = await api.saveAsDialog("Untitled.md");
+      if (!file) return;
+      await api.writeFile(file, "");
+    }
+    await loadFile(file);
+    if (current.folder) {
+      setSidebar(true);
+      await refreshFolder();
+      await revealInTree(file);
+      startRename(file, () => view.focus());
+    } else view.focus();
+  }
+  async function renameEntry(from, name2) {
+    const to = `${from.slice(0, from.lastIndexOf("/"))}/${name2}`;
+    const err = await api.renamePath(from, to);
+    if (err) {
+      notice(err);
+      renderTree();
+    }
+  }
+  var remap = (p, from, to) => p === from ? to : p && p.startsWith(from + "/") ? to + p.slice(from.length) : p;
+  async function onPathRenamed(from, to) {
+    const file = remap(current.file, from, to);
+    if (file !== current.file) {
+      current.file = file;
+      api.watchFile(file);
+      api.setDirty(dirty, file);
+      api.setState({ file });
+      updateTitle();
+    }
+    if (!current.folder) return;
+    tree.expanded = new Set([...tree.expanded].map((d) => remap(d, from, to)));
+    const folder = remap(current.folder, from, to);
+    if (folder !== current.folder) {
+      current.folder = folder;
+      $("folder-name").textContent = folder.split("/").pop();
+      $("folder-name").title = folder;
+    }
+    api.setState({ folder, expanded: [...tree.expanded] });
+    await refreshFolder();
+    const li = $("file-list").querySelector("li.active");
+    if (li) li.scrollIntoView({ block: "nearest" });
+  }
   function markActive() {
     for (const li of $("file-list").querySelectorAll("li.file")) li.classList.toggle("active", li.dataset.path === current.file);
   }
@@ -27172,6 +27540,7 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
   async function boot() {
     document.documentElement.style.setProperty("--indent", `${INDENT_EM}em`);
     view = new EditorView({ state: makeState(""), parent: $("editor") });
+    window.literalView = view;
     updateTitle();
     updateStatus();
     $("choose-folder").addEventListener("click", async () => {
@@ -27179,29 +27548,28 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
       if (f) loadFolder(f);
     });
     $("sidebar-collapse").addEventListener("click", () => setSidebar(false));
+    $("new-file").addEventListener("click", newDocument);
     $("sidebar-handle").addEventListener("click", () => setSidebar(true));
     $("mode-rendered").addEventListener("click", () => chooseMode(false));
     $("mode-raw").addEventListener("click", () => chooseMode(true));
     api.onMenu(async (cmd2) => {
       switch (cmd2) {
-        case "open": {
-          const f = await api.openFileDialog();
-          if (f) openFile(f);
-          return;
-        }
-        case "open-folder": {
-          const f = await api.openFolderDialog();
-          if (f) loadFolder(f);
-          return;
-        }
         case "save": {
           if (!await save()) api.notifySaveCancelled();
           return;
         }
         case "save-as":
           return saveAs();
+        case "new-document":
+          return newDocument();
         case "reveal":
           return api.reveal(current.file);
+        case "rename":
+          if (current.file) {
+            await revealInTree(current.file);
+            startRename(current.file);
+          }
+          return;
         case "undo":
           undo(view);
           return;
@@ -27232,14 +27600,13 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
       openedFromOS = true;
       openFile(file);
     });
-    api.onFileChanged(async (file) => {
-      if (file !== current.file || dirty) return;
-      const text = await api.readFile(file);
-      if (text === current.savedText) return;
-      const head = Math.min(view.state.selection.main.head, text.length);
-      current.savedText = text;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: head } });
-      setDirty(false);
+    api.onFileChanged((file) => {
+      if (file === current.file) mergeFromDisk(file);
+    });
+    api.onPathRenamed(onPathRenamed);
+    api.onSpellcheck((on) => {
+      spellOn = on;
+      view.dispatch({ effects: spell.reconfigure(spellAttrs(on)) });
     });
     document.addEventListener("dragover", (e) => e.preventDefault());
     document.addEventListener("drop", (e) => {
@@ -27249,13 +27616,20 @@ ${indent}${next}${space4}${task ? "[ ] " : ""}`;
     });
     const st = await api.getState();
     preferRaw = !!st.raw;
+    spellOn = st.spell !== false;
+    view.dispatch({ effects: spell.reconfigure(spellAttrs(spellOn)) });
     applyRaw(preferRaw);
     if (st.sidebarHidden) setSidebar(false);
     if (st.folder) await loadFolder(st.folder, st.expanded || []);
     if (st.file && !openedFromOS) {
-      try {
-        await loadFile(st.file);
-      } catch {
+      if (await api.probeFile(st.file) === "dir") {
+        await loadFolder(st.file);
+        api.setState({ file: null });
+      } else {
+        try {
+          await loadFile(st.file);
+        } catch {
+        }
       }
     }
     view.focus();

@@ -21,13 +21,13 @@
 </head>
 <body>
   <div id="app">
-    <aside id="sidebar"><div id="sidebar-head"><span id="folder-name"></span><button id="choose-folder"></button><button id="sidebar-collapse"></button></div><ul id="file-list"></ul></aside>
+    <aside id="sidebar"><div id="sidebar-head"><span id="folder-name"></span><button id="choose-folder"></button><button id="sidebar-collapse"></button></div><ul id="file-list"></ul><div id="sidebar-foot"><button id="new-file"></button></div></aside>
     <main id="main">
       <div id="topbar"><button id="sidebar-handle" class="hidden"></button>
         <div id="mode-switch"><button id="mode-rendered" class="mode active"></button><button id="mode-raw" class="mode"></button></div></div>
       <div id="editor"></div>
       <div id="diagrams"></div>
-      <div id="statusbar"><span id="status-left"><span id="status-dirty" class="clean"></span><span id="status-file"></span></span><span id="status-right"><span id="status-pos"></span></span></div>
+      <div id="statusbar"><span id="status-left"><span id="status-dirty" class="clean"></span><span id="status-file"></span><span id="status-notice"></span></span><span id="status-right"><span id="status-pos"></span></span></div>
     </main>
   </div>
   <script>
@@ -49,6 +49,10 @@
       openExternal: async (url) => post({ type: 'open', url }),
       openFileDialog: async () => null, openFolderDialog: async () => null, saveAsDialog: async () => null,
       confirmDiscard: async () => true,
+      // Added to Literal after 2026-11-06 (sidebar rename and new file, spell-check switch); the whiteboard has no
+      // sidebar, so these answer "nothing". The renderer calls all of them at start-up: one missing stops the editor.
+      createFile: async () => null, renamePath: async () => 'not available here', sidebarMenu: async () => null,
+      onPathRenamed: () => {}, onSpellcheck: () => {},
       notifySaved: () => {}, notifySaveCancelled: () => {},
       onMenu: (cb) => { onMenu = cb; }, onOpenPath: (cb) => { onOpenPath = cb; }, onFileChanged: (cb) => { onFileChanged = cb; },
     };

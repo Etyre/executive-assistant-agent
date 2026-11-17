@@ -130,7 +130,12 @@ in place; ```mermaid fences are drawn as diagrams under the text. It autosaves s
 the agent's edits appear live, and if both sides changed the page a banner lets you load theirs or keep yours.
 Files live in `data/workspace/` on the server, so any editor works too; every version of every page is kept.
 Updating the editor: build Literal (`npm run build`), copy `out/renderer.js` and `src/styles.css` into
-`Atlas/Resources/literal/`, run `./build.sh`.
+`Atlas/Resources/literal/`, then check `embed.html` still gives the renderer everything it asks for at start-up:
+every `api.<name>` it calls needs an entry in the `window.literal` bridge and every `$('<id>')` an element, or the
+editor stops loading (`grep -o "api\.[a-zA-Z]*" src/renderer.js | sort -u` against the bridge). Commit; the
+auto-deploy rebuilds the Mac app. The copy was last refreshed 2026-11-16 (from Literal `a046af8`): the 6 Nov copy
+still had the heading margins that made every click and selection below a heading land a line low, fixed in
+Literal on 7 Nov.
 
 ## Notifications that stay
 
