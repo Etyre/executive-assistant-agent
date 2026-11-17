@@ -89,6 +89,8 @@ class SourceSettings:
     toggl_token_env: str = "TOGGL_API_TOKEN"
     tracker_agent_token_env: str = "AGENT_API_TOKEN"      # the tracker's optional agent-API bearer token
     calendar_ics_urls_env: str = "CALENDAR_ICS_URLS"      # iCal feed URL(s), comma-separated; else via the tracker
+    calendar_write_url_env: str = "CALENDAR_WRITE_URL"    # /exec URL of deploy/calendar_script (Google Apps Script); unset = read-only
+    calendar_write_token_env: str = "CALENDAR_WRITE_TOKEN"  # shared secret, also in the script's CALENDAR_TOKEN property
     otter_email_env: str = "OTTER_EMAIL"                  # Otter.ai login (read-only transcript access)
     otter_password_env: str = "OTTER_PASSWORD"
     otter_logseq_graph: str = "~/Documents/main-logseq-graph"   # Logseq graph holding the auto-imported Otter pages; "" = none

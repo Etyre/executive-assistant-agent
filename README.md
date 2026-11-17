@@ -42,7 +42,7 @@ notification is what reaches Eli.
 | Sleep Bandit | read | new `GET /api/agent/summary?days=N` on :8777: nights, metrics, tonight's checklist, verdicts, HRV readiness status (no planning side effect) |
 | Exercise log | read | the exercise-tracker Apps Script `?action=export` (`EXERCISE_EXPORT_URL`) |
 | Otter.ai transcripts | read | new recordings through Otter's unofficial API (`OTTER_EMAIL`/`OTTER_PASSWORD`, no third party), plus the 2024+ archive the Roam extension wrote into the Logseq graph (`sources.otter_logseq_graph`); both merged into `data/otter.db` with FTS5 search (`otter_recent`, `otter_search`, `otter_transcript`); `python -m ea otter --all` for the first full pull |
-| Calendar | read | the same iCal feed(s) the tracker uses (`CALENDAR_ICS_URLS`), any date range up to 62 days; falls back to the tracker's single-day `GET /api/calendar` |
+| Calendar | read + write | read: the same iCal feed(s) the tracker uses (`CALENDAR_ICS_URLS`), any date range up to 62 days; falls back to the tracker's single-day `GET /api/calendar`. Write (`calendar_create_event`, `calendar_update_event`, `calendar_delete_event`, `calendar_writable`): a Google Apps Script web app that runs as you (`deploy/calendar_script/`, address in `CALENDAR_WRITE_URL`, shared secret in `CALENDAR_WRITE_TOKEN`); read-only until both are set. The script never adds guests and refuses to change or delete an event that has other guests |
 | Project Tracker | read + write | through the tracker's **agent API** (`/api/agent/*`, sends `X-Agent-Name` and the optional `AGENT_API_TOKEN`): outline and task search, tasks/projects created with agent attribution, signed notes on any item, quick-add, the day's scheduling context (free windows, prioritised candidates, rules), **set the schedule** block by block (pinned against the tracker's re-planner, with what did not fit returned), steer a day in prose (instructions the tracker re-plans with), rebuild, unpin; plus feed, complete/update task from the plain API. The daily checklist is read-only and comes back compact (per row: today, last met, consecutive misses, colour from its steps-to-yellow rule; `days` adds recent raw values, `full` the whole sheet), because the full sheet is ~50 KB, more than the SDK passes back as a tool result. `tracker_open` starts the Project Tracker app (`sources.tracker_app`, opened with `open -g` so it does not take focus) when its API is down; every tracker tool says so when the app is not answering. Only on the Mac itself, not through the bridge Tags and metadata go through the same API: `tracker_set_task_meta` (the tags string as typed, `#p1 #due:fri #reading`, or named fields; estimate; timer name) and `tracker_set_project_meta` (subtitle, Toggl project), each recorded by the tracker as the agent's signed note with its `why`. |
 | Memory | read + write | `data/memory/*.md` with `sources` (conversation dates + channel) and `edits` (dates) in the frontmatter; FTS5 search; transcripts in `data/transcripts/YYYY-MM-DD.jsonl` |
 | Reminders | write | pushed to the apps at the time (and shown in every chat's history) |
@@ -287,7 +287,7 @@ stops. Only the access-token field is excluded.
 | `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs, installs into /Applications and relaunches the Mac app; own README) |
 | `apps/Atlas/auto_deploy.py`, `install-auto-deploy.sh` | launchd agent `com.elityre.atlas-app-deploy`: builds each new commit of the Mac app and installs it in /Applications once the agent is not mid-turn |
 | `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: lets a cloud agent reach the Mac's local servers over Tailscale |
-| `deploy/` | `Dockerfile`, `docker-compose.yml`, `gcp/` (VM scripts + README), `macmini/` (launchd plist + `install.sh`) |
+| `deploy/` | `Dockerfile`, `docker-compose.yml`, `gcp/` (VM scripts + README), `macmini/` (launchd plist + `install.sh`), `calendar_script/` (`Code.gs` + manifest: the Google Apps Script that gives the agent calendar write access; setup steps at the top of `Code.gs`) |
 | `ios/SHORTCUT.md` | Action button / Siri setup |
 | `scripts/import_tracker_settings.py` | Copies the exercise export URL and calendar feeds from the Project Tracker's config into `data/.env` |
 | `tests/` | pytest suite (no network, scripted model); `test_llm_contact.py` covers the LLM inbox on both engines, `test_fast_mode.py` which turns are fast |
@@ -361,6 +361,9 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 
 ## Settings that matter
 
+- **Calendar write access**: the Apps Script project in your Google account holding `deploy/calendar_script/Code.gs`,
+  deployed as a web app (Execute as: Me, access: Anyone), with the Script Property `CALENDAR_TOKEN` equal to
+  `CALENDAR_WRITE_TOKEN` in `data/.env`, and its `/exec` URL in `CALENDAR_WRITE_URL`. Steps at the top of `Code.gs`.
 - The `claude` login on this Mac (the subscription the `agent_sdk` engine bills); `ANTHROPIC_API_KEY` in
   `data/.env` is the fallback when the window is used up.
 - The tracker's agent API (`/api/agent`) and Sleep Bandit's agent routes are additions in those repos
@@ -380,6 +383,11 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 
 ## Gotchas learned
 
+- **Calendar writes go through an Apps Script, reads through the iCal feed, and the feed lags.** An event the agent
+  just created can take minutes to show in `calendar_events`; the create result (with its `event_id`) is the proof.
+  After editing `deploy/calendar_script/Code.gs`, paste it into the script project again and deploy a **new
+  version** (Deploy -> Manage deployments -> Edit), or the old code keeps running. An answer that is an HTML page
+  instead of JSON means the deployment is not "Execute as: Me, access: Anyone" or the URL is not the `/exec` one.
 - **The Mac app in /Applications went stale while a newer one ran.** `build.sh` used to relaunch the app from
   `apps/Atlas/build/`, so the login item in /Applications stayed at the 12 Nov build for three days and would have
   come back at the next login. `build.sh` now installs over `/Applications/Atlas.app` and launches that copy

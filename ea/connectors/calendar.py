@@ -1,7 +1,11 @@
-"""Calendar, read-only, over any number of iCal feeds (Google Calendar's "Secret address in iCal format"
-needs no OAuth). `CALENDAR_ICS_URLS` holds them, comma- or newline-separated; the same URLs the Project
-Tracker has in its `[calendar] ics_urls`. Without them, the agent falls back to the tracker's own
-single-day `/api/calendar`."""
+"""Calendar. Reads go over any number of iCal feeds (Google Calendar's "Secret address in iCal format" needs no
+OAuth). `CALENDAR_ICS_URLS` holds them, comma- or newline-separated; the same URLs the Project Tracker has in its
+`[calendar] ics_urls`. Without them, the agent falls back to the tracker's own single-day `/api/calendar`.
+
+Changes (create, update, delete) go to a Google Apps Script web app that runs as the user
+(`deploy/calendar_script/`): `CALENDAR_WRITE_URL` is its /exec address and `CALENDAR_WRITE_TOKEN` the shared
+secret. Without both, the calendar is read-only. The script, not this file, holds the hard rules (no guests are
+ever added; an event with other guests is not changed)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -30,6 +34,35 @@ class Calendar:
         self.urls = [u.strip() for u in raw.replace("\n", ",").split(",") if u.strip()]
         self.tracker = tracker
         self._cache: dict[str, tuple[float, bytes]] = {}
+        self.write_url = config.secret(s.sources.calendar_write_url_env) or ""
+        self.write_token = config.secret(s.sources.calendar_write_token_env) or ""
+
+    def can_write(self) -> bool:
+        return bool(self.write_url and self.write_token)
+
+    def local_iso(self, when: str) -> str:
+        """'2026-11-20T15:00' in the app's timezone -> the same moment with its offset; one that has an offset is kept."""
+        t = dt.datetime.fromisoformat(when)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=ZoneInfo(self.timezone))
+        return t.isoformat()
+
+    def write(self, action: str, **fields: Any) -> dict[str, Any]:
+        """One change through the Apps Script. Raises SourceError with the script's own words when it refuses."""
+        if not self.can_write():
+            raise SourceError("calendar write access is not set up: CALENDAR_WRITE_URL and CALENDAR_WRITE_TOKEN are not both set "
+                              "(deploy/calendar_script/Code.gs has the steps; the user has to deploy it)")
+        body = {"token": self.write_token, "action": action, **{k: v for k, v in fields.items() if v is not None}}
+        try:
+            r = httpx.post(self.write_url, json=body, follow_redirects=True, timeout=60)
+            r.raise_for_status()
+            out = r.json()
+        except (httpx.HTTPError, ValueError) as e:      # an HTML page instead of JSON: the deployment is not public or the URL is wrong
+            raise SourceError(f"calendar script did not answer with JSON ({str(e)[:160]}); check the deployment (Execute as: Me, access: Anyone)") from e
+        if out.get("error"):
+            raise SourceError(f"calendar: {out['error']}")
+        self._cache.clear()                             # the next read refetches (Google's own feed can still lag some minutes)
+        return out
 
     def enabled(self) -> bool:
         return bool(self.urls) or self.tracker is not None
@@ -86,7 +119,7 @@ class Calendar:
                 all_day = not isinstance(s_, dt.datetime)
                 if all_day:
                     out.append({"date": s_.isoformat(), "title": str(ev.get("SUMMARY", "")).strip() or "(busy)", "all_day": True,
-                                "calendar": calname, "start": None, "end": None, "location": str(ev.get("LOCATION", "") or ""),
+                                "calendar": calname, "event_id": str(ev.get("UID", "") or ""), "start": None, "end": None, "location": str(ev.get("LOCATION", "") or ""),
                                 "description": str(ev.get("DESCRIPTION", "") or "")[:300]})
                     continue
                 if s_.tzinfo is None:
@@ -95,7 +128,7 @@ class Calendar:
                     e_ = e_.replace(tzinfo=local_tz)
                 s_l, e_l = s_.astimezone(local_tz), e_.astimezone(local_tz)
                 out.append({"date": s_l.date().isoformat(), "title": str(ev.get("SUMMARY", "")).strip() or "(busy)", "all_day": False,
-                            "calendar": calname, "start": s_l.strftime("%H:%M"), "end": e_l.strftime("%H:%M"),
+                            "calendar": calname, "event_id": str(ev.get("UID", "") or ""), "start": s_l.strftime("%H:%M"), "end": e_l.strftime("%H:%M"),
                             "busy": str(ev.get("TRANSP", "OPAQUE")).upper() != "TRANSPARENT",
                             "location": str(ev.get("LOCATION", "") or ""), "description": str(ev.get("DESCRIPTION", "") or "")[:300]})
         out.sort(key=lambda e: (e["date"], e["start"] or ""))

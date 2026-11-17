@@ -1,5 +1,5 @@
-"""Read-only tools over the user's metrics: Toggl, Focus Monitor, Oura (via Sleep Bandit), Sleep Bandit,
-exercise log."""
+"""Tools over the user's metrics, read-only: Toggl, Focus Monitor, Oura (via Sleep Bandit), Sleep Bandit, exercise
+log. And the calendar: read, plus create/update/delete when the calendar script is set up."""
 from __future__ import annotations
 
 from typing import Any
@@ -71,8 +71,8 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
     def exercise_days_since() -> Any:
         return exercise.days_since()
 
-    @reg.tool("calendar_events", "Calendar events (read-only) from start_date for `days` days, across every configured "
-              "calendar (each event says which one: `calendar`): date, title, start/end "
+    @reg.tool("calendar_events", "Calendar events from start_date for `days` days, across every configured "
+              "calendar (each event says which one: `calendar`, and its `event_id`): date, title, start/end "
               "(HH:MM local), all_day, location, description. Omit start_date for today; days defaults to 1, max 62.",
               {"properties": {"start_date": {"type": "string", "description": "YYYY-MM-DD"},
                               "days": {"type": "integer", "minimum": 1, "maximum": 62}}})
@@ -82,3 +82,64 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
         evs = calendar.events(start, days)
         errs = getattr(calendar, "last_errors", [])
         return {"warning": "; ".join(errs), "events": evs} if errs else evs
+
+    WHEN = {"type": "string", "description": "Local time, YYYY-MM-DDTHH:MM (the user's timezone unless an offset is given)."}
+
+    def guard_cal(fn):
+        from ..connectors.http import SourceError
+        import functools
+
+        @functools.wraps(fn)
+        def inner(**kw: Any) -> Any:
+            try:
+                return fn(**kw)
+            except (SourceError, ValueError) as e:
+                return {"error": str(e)}
+        return inner
+
+    @reg.tool("calendar_writable", "The calendars you can change (the ones the user owns), with which is the default.")
+    @guard_cal
+    def calendar_writable() -> Any:
+        return calendar.write("calendars")
+
+    @reg.tool("calendar_create_event", "Put an event on the user's Google Calendar. Timed: start and end. All day: date "
+              "(and end_date, the last day, for several days). `calendar` is a name from calendar_writable; omit it for "
+              "the default calendar. No guests can be added, so nothing is ever sent to anyone. The result has the "
+              "event_id; calendar_events may take some minutes to show the new event.",
+              {"properties": {"title": {"type": "string"}, "start": WHEN, "end": WHEN,
+                              "date": {"type": "string", "description": "YYYY-MM-DD, for an all-day event"},
+                              "end_date": {"type": "string", "description": "YYYY-MM-DD, last day inclusive"},
+                              "calendar": {"type": "string"}, "location": {"type": "string"}, "description": {"type": "string"}},
+               "required": ["title"]}, writes=True)
+    @guard_cal
+    def calendar_create_event(title: str, start: str | None = None, end: str | None = None, date: str | None = None,
+                              end_date: str | None = None, **more: Any) -> Any:      # `calendar` arrives in more: the name is taken here
+        if not date and not (start and end):
+            return {"error": "give start and end, or date for an all-day event"}
+        return calendar.write("create", title=title, start=calendar.local_iso(start) if start and not date else None,
+                              end=calendar.local_iso(end) if end and not date else None, date=date, end_date=end_date,
+                              calendar=more.get("calendar"), location=more.get("location"), description=more.get("description"))
+
+    @reg.tool("calendar_update_event", "Change an event on the user's calendar: title, start, end, location, description "
+              "(only what you give changes). Identify it by event_id and date, both from calendar_events (date is the day "
+              "it is on now), plus `calendar` when it is not on the default calendar. For a repeating event only that "
+              "day's occurrence changes. An event with other guests is refused: tell the user to change it himself.",
+              {"properties": {"event_id": {"type": "string"}, "date": {"type": "string", "description": "YYYY-MM-DD, the day the event is on now"},
+                              "calendar": {"type": "string"}, "title": {"type": "string"}, "start": WHEN, "end": WHEN,
+                              "location": {"type": "string"}, "description": {"type": "string"}},
+               "required": ["event_id", "date"]}, writes=True)
+    @guard_cal
+    def calendar_update_event(event_id: str, date: str, start: str | None = None, end: str | None = None, **more: Any) -> Any:
+        return calendar.write("update", event_id=event_id, date=date, start=calendar.local_iso(start) if start else None,
+                              end=calendar.local_iso(end) if end else None,
+                              **{k: more[k] for k in ("calendar", "title", "location", "description") if more.get(k) is not None})
+
+    @reg.tool("calendar_delete_event", "Delete an event from the user's calendar, identified like calendar_update_event "
+              "(event_id, date, calendar). For a repeating event only that day's occurrence goes. An event with other "
+              "guests is refused. Google keeps a deleted event in the calendar's Trash for 30 days.",
+              {"properties": {"event_id": {"type": "string"}, "date": {"type": "string", "description": "YYYY-MM-DD"},
+                              "calendar": {"type": "string"}},
+               "required": ["event_id", "date"]}, writes=True)
+    @guard_cal
+    def calendar_delete_event(event_id: str, date: str, **more: Any) -> Any:
+        return calendar.write("delete", event_id=event_id, date=date, calendar=more.get("calendar"))
