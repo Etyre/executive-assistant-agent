@@ -103,6 +103,8 @@ class SourceSettings:
     otter_ingest: bool = True                             # the scheduler pulls new recordings and the agent reads each one
     otter_ingest_max_chars: int = 60_000                  # transcript text handed to the agent per recording (rest via otter_transcript)
     toggl_workspace_id: int | None = None
+    tracker_copy_url: str = ""                            # server only: the read-only copy of the tracker beside the agent, used
+                                                          # for reads while the Mac is asleep (ea/connectors/project_tracker.py)
     direct: list[str] = dataclasses.field(default_factory=list)       # services reached at their own URL even when a bridge is set
                                                           # ("bandit", "tracker"): the ones that run beside the agent on the server
     toggl_source: str = "focus_monitor"                   # "focus_monitor": read the Focus Monitor's synced Toggl table (no Toggl API calls,

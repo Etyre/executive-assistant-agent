@@ -35,7 +35,9 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
         """The app is not running: say so and point at tracker_open instead of a bare connection error."""
         def run(*a, **k):
             try:
-                return fn(*a, **k)
+                out = fn(*a, **k)
+                notes = tracker.take_notes()         # "this is the server's copy as of ...", or a queued change that failed
+                return {"note": " ".join(notes), "result": out} if notes else out
             except SourceError as e:
                 # Three ways "the app is down" arrives: a refused connection, the bridge's 502 (server deployment),
                 # and nightblock's proxy answering 502 for localhost while the night block is on.

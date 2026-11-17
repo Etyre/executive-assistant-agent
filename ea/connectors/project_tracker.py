@@ -10,6 +10,7 @@ for the agent: the user ticks it, so there is deliberately no write path to it h
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import pathlib
 import signal
@@ -20,7 +21,7 @@ from typing import Any
 import httpx
 
 from .. import config
-from .http import ServiceRouter, SourceError, get_json, send_json
+from .http import MAC_AWAY, ServiceRouter, SourceError, get_json, send_json
 
 SCHEDULE_KINDS = ("task", "routine", "exercise", "journal", "break", "meeting", "checklist")
 
@@ -47,6 +48,10 @@ class ProjectTracker:
         s = settings or config.load()
         self.headers = {"X-Agent-Name": s.agent_name}
         self.app_path = s.sources.tracker_app
+        self.copy_url = s.sources.tracker_copy_url.rstrip("/") if router.bridge else ""
+        self.outbox_path = s.data_dir / "tracker_outbox.jsonl"
+        self.failed_path = s.data_dir / "tracker_outbox_failed.jsonl"
+        self.notes: list[str] = []
         tok = config.secret(s.sources.tracker_agent_token_env)
         if tok:
             self.headers["Authorization"] = f"Bearer {tok}"
@@ -55,6 +60,88 @@ class ProjectTracker:
         c = self.router.client("tracker")
         c.headers.update(self.headers)
         return c
+
+    # ---------------------------------------------------------------- the Mac asleep (server deployment only)
+    # The tracker is on Eli's Mac. While the Mac is awake every call goes there. While it is asleep, reads are
+    # answered by the read-only copy on the server (sources.tracker_copy_url; synced from the Mac every five minutes)
+    # and changes are kept in an outbox and made on the Mac when it wakes (replay, from the scheduler).
+    def _away(self, e: SourceError) -> bool:
+        return bool(self.copy_url) and MAC_AWAY[:30] in str(e)
+
+    def _get(self, path: str, **params: Any) -> Any:
+        try:
+            with self._c() as c:
+                return get_json(c, path, **params)
+        except SourceError as e:
+            if not self._away(e):
+                raise
+        with httpx.Client(base_url=self.copy_url, timeout=30, headers=self.headers) as c:
+            out = get_json(c, path, **params)
+            at = (get_json(c, "/api/replica") or {}).get("synced_at")
+        when = dt.datetime.fromtimestamp(at).strftime("%Y-%m-%d %H:%M") if at else "an unknown time"
+        waiting = len(self._outbox())
+        self.notes = [n for n in self.notes if not n.startswith("Eli's Mac is asleep")]     # one such note per result
+        self.notes.append(f"Eli's Mac is asleep, so this is the server's copy of the tracker as of {when} (server time)."
+                          + (f" {waiting} change(s) you made since are waiting for the Mac and are not in it." if waiting else ""))
+        return out
+
+    def _send(self, method: str, path: str, body: Any = None, **params: Any) -> Any:
+        try:
+            with self._c() as c:
+                return send_json(c, method, path, body, **params)
+        except SourceError as e:
+            if not self._away(e):
+                raise
+        rec = {"at": time.time(), "method": method, "path": path, "body": body, "params": {k: v for k, v in params.items() if v is not None}}
+        with open(self.outbox_path, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return {"queued": True, "note": "Eli's Mac is asleep, so the tracker could not be changed just now. The change is saved "
+                "and will be made when the Mac wakes; nothing more is needed from you. Until then the tracker's copy will "
+                "not show it, and a new task or project has no ID yet."}
+
+    def _outbox(self) -> list[dict[str, Any]]:
+        try:
+            return [json.loads(ln) for ln in self.outbox_path.read_text().splitlines() if ln.strip()]
+        except OSError:
+            return []
+
+    def replay(self) -> dict[str, int]:
+        """Make the waiting changes on the Mac, oldest first. Stops at the first one that finds the Mac away again;
+        one the tracker refuses is dropped and remembered (failed_path) so the next tracker tool result says so."""
+        waiting, done, failed = self._outbox(), 0, 0
+        if not waiting:
+            return {"done": 0, "failed": 0, "waiting": 0}
+        left = list(waiting)
+        for rec in waiting:
+            try:
+                with self._c() as c:
+                    send_json(c, rec["method"], rec["path"], rec.get("body"), **rec.get("params", {}))
+                done += 1
+            except SourceError as e:
+                if MAC_AWAY[:30] in str(e):
+                    break
+                failed += 1
+                with open(self.failed_path, "a") as f:
+                    f.write(json.dumps({**rec, "error": str(e)[:300]}, ensure_ascii=False) + "\n")
+            left.remove(rec)
+        tmp = self.outbox_path.with_suffix(".tmp")
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in left))
+        tmp.replace(self.outbox_path)
+        return {"done": done, "failed": failed, "waiting": len(left)}
+
+    def take_notes(self) -> list[str]:
+        """What a tool result should carry besides its data: "this is the copy", and changes that failed on replay."""
+        notes, self.notes = self.notes, []
+        try:
+            failed = [json.loads(ln) for ln in self.failed_path.read_text().splitlines() if ln.strip()]
+            self.failed_path.unlink()
+        except OSError:
+            failed = []
+        for f in failed:
+            when = dt.datetime.fromtimestamp(f["at"]).strftime("%Y-%m-%d %H:%M")
+            notes.append(f"A change you made at {when} while the Mac was asleep was refused when it was applied: "
+                         f"{f['method']} {f['path']} {json.dumps(f.get('body'), ensure_ascii=False)[:200]} -> {f['error']}")
+        return notes
 
     # ---------------------------------------------------------------- read
     def ping(self) -> dict[str, Any]:
@@ -130,8 +217,7 @@ class ProjectTracker:
 
     def tree(self) -> dict[str, Any]:
         """{projects: [{id, parent_id, name, path, notes, source, open_tasks, notes_added}], tree: nested}"""
-        with self._c() as c:
-            return get_json(c, "/api/agent/tree")
+        return self._get("/api/agent/tree")
 
     def outline(self, max_tasks_per_project: int = 40) -> str:
         """The open outline as indented text, which models read far better than nested JSON."""
@@ -171,97 +257,76 @@ class ProjectTracker:
         return "\n".join(lines) or "(no projects)"
 
     def find_tasks(self, q: str = "", project_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
-        with self._c() as c:
-            return get_json(c, "/api/agent/tasks", q=q or None, project_id=project_id, limit=limit)
+        return self._get("/api/agent/tasks", q=q or None, project_id=project_id, limit=limit)
 
     def task(self, tid: int) -> dict[str, Any]:
-        with self._c() as c:
-            return get_json(c, f"/api/agent/tasks/{tid}")
+        return self._get(f"/api/agent/tasks/{tid}")
 
     def schedule_context(self, date: str | None = None) -> dict[str, Any]:
         """The day as the tracker sees it: current plan with statuses, free windows between meetings, prioritised
         candidate tasks with calibrated estimates, routines, exercise, rules document, standing instructions."""
-        with self._c() as c:
-            return get_json(c, "/api/agent/schedule", date=date)
+        return self._get("/api/agent/schedule", date=date)
 
     def feed(self) -> dict[str, Any]:
-        with self._c() as c:
-            return get_json(c, "/api/feed")
+        return self._get("/api/feed")
 
     def calendar(self, date: str | None = None) -> list[dict[str, Any]]:
-        with self._c() as c:
-            return get_json(c, "/api/calendar", date=date)
+        return self._get("/api/calendar", date=date)
 
     def checklist(self) -> dict[str, Any]:
-        with self._c() as c:
-            return get_json(c, "/api/checklist")
+        return self._get("/api/checklist")
 
 
     def notes(self, task_id: int | None = None, project_id: int | None = None) -> list[dict[str, Any]]:
-        with self._c() as c:
-            return get_json(c, "/api/agent/notes", task_id=task_id, project_id=project_id)
+        return self._get("/api/agent/notes", task_id=task_id, project_id=project_id)
 
     # ---------------------------------------------------------------- write (agent API)
     def create_task(self, title: str, **fields: Any) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/agent/tasks", {"title": title, **{k: v for k, v in fields.items() if v is not None}})
+        return self._send("POST", "/api/agent/tasks", {"title": title, **{k: v for k, v in fields.items() if v is not None}})
 
     def create_project(self, name: str, parent_id: int | None = None, parent_path: list[str] | None = None, notes: str = "") -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/agent/projects", {"name": name, "parent_id": parent_id, "parent_path": parent_path, "notes": notes})
+        return self._send("POST", "/api/agent/projects", {"name": name, "parent_id": parent_id, "parent_path": parent_path, "notes": notes})
 
     def quick_add(self, text: str) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/agent/quick_add", {"text": text})
+        return self._send("POST", "/api/agent/quick_add", {"text": text})
 
     def add_note(self, body: str, task_id: int | None = None, project_id: int | None = None) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/agent/notes", {"body": body, "task_id": task_id, "project_id": project_id})
+        return self._send("POST", "/api/agent/notes", {"body": body, "task_id": task_id, "project_id": project_id})
 
     def delete_note(self, nid: int) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "DELETE", f"/api/agent/notes/{nid}")
+        return self._send("DELETE", f"/api/agent/notes/{nid}")
 
     def set_schedule(self, items: list[dict[str, Any]], date: str | None = None, work_start: str | None = None,
                      work_end: str | None = None, rationale: str = "", pin: bool = True) -> dict[str, Any]:
         """Returns {ok, dropped: [blocks that did not fit], plan}."""
         body = {"items": items, "date": date, "work_start": work_start, "work_end": work_end, "rationale": rationale, "pin": pin}
-        with self._c() as c:
-            return send_json(c, "PUT", "/api/agent/schedule", body)
+        return self._send("PUT", "/api/agent/schedule", body)
 
     def set_day_instructions(self, text: str, date: str | None = None, rebuild: bool = True) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "PUT", "/api/agent/schedule/instructions", {"text": text, "date": date, "rebuild": rebuild})
+        return self._send("PUT", "/api/agent/schedule/instructions", {"text": text, "date": date, "rebuild": rebuild})
 
     def clear_day_instructions(self, date: str | None = None) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "DELETE", "/api/agent/schedule/instructions", None, date=date)
+        return self._send("DELETE", "/api/agent/schedule/instructions", None, date=date)
 
     def rebuild_plan(self, from_now: bool = True, until: str | None = None, date: str | None = None) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/agent/schedule/rebuild", {"from_now": from_now, "until": until, "date": date})
+        return self._send("POST", "/api/agent/schedule/rebuild", {"from_now": from_now, "until": until, "date": date})
 
     def unpin_plan(self, date: str | None = None) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", "/api/agent/schedule/unpin", None, date=date)
+        return self._send("POST", "/api/agent/schedule/unpin", None, date=date)
 
     def set_task_meta(self, tid: int, **fields: Any) -> dict[str, Any]:
         """Tags, priority, dates, estimate, timer name. "" and 0 are real values here (they clear), only None is left out."""
-        with self._c() as c:
-            return send_json(c, "PATCH", f"/api/agent/tasks/{tid}", {k: v for k, v in fields.items() if v is not None})
+        return self._send("PATCH", f"/api/agent/tasks/{tid}", {k: v for k, v in fields.items() if v is not None})
 
     def set_project_meta(self, pid: int, **fields: Any) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "PATCH", f"/api/agent/projects/{pid}", {k: v for k, v in fields.items() if v is not None})
+        return self._send("PATCH", f"/api/agent/projects/{pid}", {k: v for k, v in fields.items() if v is not None})
 
     # ---------------------------------------------------------------- write (plain API; not covered by the agent API)
     def update_task(self, tid: int, **fields: Any) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "PATCH", f"/api/tasks/{tid}", {k: v for k, v in fields.items() if v is not None})
+        return self._send("PATCH", f"/api/tasks/{tid}", {k: v for k, v in fields.items() if v is not None})
 
     def complete_task(self, tid: int, undo: bool = False) -> dict[str, Any]:
-        with self._c() as c:
-            return send_json(c, "POST", f"/api/tasks/{tid}/{'uncomplete' if undo else 'complete'}")
+        return self._send("POST", f"/api/tasks/{tid}/{'uncomplete' if undo else 'complete'}")
 
 
 MARKERS = {"Paused at workshops": "paused_at_workshops", "Covered when overwelmed": "covered_when_overwhelmed", "dimmed": "dimmed"}

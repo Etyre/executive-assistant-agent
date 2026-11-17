@@ -41,6 +41,7 @@ class Scheduler:
         self.rng = rng or random.Random()
         self._now_fn = now_fn
         self._relay_at = 0.0                   # last time the inbox relay ran (server deployment only)
+        self._outbox_at = 0.0                  # last time changes queued for the tracker were tried on the Mac (same)
         self._focus_at = 0.0                   # last time the Focus Monitor's answers were copied from the Mac (same)
         self._mirror_at = 0.0                  # last time the document folders were copied from the Mac (same)
 
@@ -258,6 +259,16 @@ class Scheduler:
                 inbox_relay.forward(self.s)             # inbox records made while the Mac was asleep
             except Exception:  # noqa: BLE001
                 log.exception("inbox relay failed")
+        if self.s.sources.tracker_copy_url and self.s.sources.bridge_url and time.time() - self._outbox_at > 60:
+            self._outbox_at = time.time()
+            try:
+                tr = getattr(self.agent, "tracker", None)
+                if tr is not None and tr.outbox_path.exists() and tr.outbox_path.stat().st_size:
+                    out = tr.replay()                   # changes made while the Mac slept, now that it may be awake
+                    if out["done"] or out["failed"]:
+                        log.info("tracker outbox: %s", out)
+            except Exception:  # noqa: BLE001
+                log.exception("tracker outbox replay failed")
         if self.s.sources.bridge_url and time.time() - self._focus_at > 600:
             self._focus_at = time.time()
             try:

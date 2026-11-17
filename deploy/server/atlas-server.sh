@@ -99,6 +99,9 @@ EOS
   fi
   # The tools that moved here from the Mac keep the Mac's time zone (follow-mac-timezone.sh says why).
   scp -q "$REPO/deploy/server/follow-mac-timezone.sh" "$SERVER:/tmp/follow-mac-timezone.sh"
+  # The read-only copy of the Project Tracker is refreshed from the Mac (sync-tracker-copy.sh says how).
+  scp -q "$REPO/deploy/server/sync-tracker-copy.sh" "$SERVER:/tmp/sync-tracker-copy.sh"
+  r "$SUDO install -m 755 /tmp/sync-tracker-copy.sh /opt/atlas/sync-tracker-copy.sh && echo '*/5 * * * * root /opt/atlas/sync-tracker-copy.sh >> /var/log/sync-tracker-copy.log 2>&1' | $SUDO tee /etc/cron.d/sync-tracker-copy >/dev/null"
   r "$SUDO install -m 755 /tmp/follow-mac-timezone.sh /opt/atlas/follow-mac-timezone.sh && echo '*/10 * * * * root /opt/atlas/follow-mac-timezone.sh >> /var/log/follow-mac-timezone.log 2>&1' | $SUDO tee /etc/cron.d/follow-mac-timezone >/dev/null"
   # The tailnet's port 8800 is handed to the agent, which itself listens on this machine only.
   r "$SUDO tailscale serve --bg --tcp=8800 tcp://localhost:8800" || echo "!! 'tailscale serve' failed; the agent will not be reachable from your devices until it works"

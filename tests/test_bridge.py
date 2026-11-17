@@ -71,7 +71,7 @@ def test_every_write_the_tracker_connector_makes_is_allowed_through_the_bridge(b
     """The connector and the bridge's allow-list are kept in step by this test, not by memory."""
     import re
     src = (ROOT / "ea/connectors/project_tracker.py").read_text()
-    calls = re.findall(r'send_json\(c, "([A-Z]+)", f?"([^"]+)"', src)
+    calls = re.findall(r'self\._send\("([A-Z]+)", f?"([^"]+)"', src)
     assert len(calls) >= 14
     for method, path in calls:
         path = re.sub(r"\{'uncomplete' if undo else 'complete'\}", "complete", path)
@@ -253,3 +253,76 @@ def test_a_direct_service_skips_the_bridge():
     assert str(r.client("bandit").base_url).rstrip("/") == "http://bandit:8777" and "x-bridge-token" not in r.client("bandit").headers
     assert str(r.client("focus").base_url).rstrip("/") == "http://mac:8799/focus" and r.via_bridge("tracker")
     config.load.cache_clear()
+
+
+def test_tracker_with_the_mac_asleep_reads_the_copy_and_queues_changes(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from ea import config
+    from ea.connectors import project_tracker as pt
+    from ea.connectors.http import ServiceRouter
+    from ea.tools import tracker_tools
+    from ea.tools.registry import ToolRegistry
+    monkeypatch.setenv("EA_DATA", str(tmp_path)); monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    config.load.cache_clear()
+    s = config.load(); s.sources.bridge_url = "http://mac:8799"; s.sources.tracker_copy_url = "http://tracker:8791"
+    state = {"awake": False, "mac_calls": [], "refuse": None}
+
+    def mac(req):                                                    # the bridge on the Mac
+        if not state["awake"]:
+            raise httpx.ConnectError("no route to host")
+        state["mac_calls"].append((req.method, req.url.path, json.loads(req.content or b"null")))
+        if state["refuse"] and state["refuse"] in req.url.path:
+            return httpx.Response(404, json={"detail": "no such task"})
+        return httpx.Response(200, json={"tasks": [{"id": 1, "title": "live"}], "ok": True})
+
+    def copy(req):                                                   # the read-only copy on the server
+        if req.url.path == "/api/replica":
+            return httpx.Response(200, json={"replica": True, "synced_at": 1794900000})
+        assert req.method == "GET"
+        return httpx.Response(200, json={"tasks": [{"id": 1, "title": "from the copy"}]})
+
+    router = ServiceRouter(s); router.token = "t"
+    real_client = httpx.Client
+    monkeypatch.setattr(router, "client", lambda service: real_client(base_url="http://mac:8799/tracker", transport=httpx.MockTransport(mac),
+                                                                      headers={"X-Bridge-Token": "t"}))
+    monkeypatch.setattr(pt.httpx, "Client", lambda **k: real_client(transport=httpx.MockTransport(copy), **k))
+    reg = ToolRegistry()
+    tr = tracker_tools.register(reg, router, s)
+    assert tr.outbox_path.parent == tmp_path
+
+    out = json.loads(reg.dispatch("tracker_find_tasks", {"q": "x"})[0])
+    assert "server's copy of the tracker as of" in out["note"] and "from the copy" in json.dumps(out["result"])
+    q = json.loads(reg.dispatch("tracker_complete_task", {"task_id": 5})[0])
+    assert q["queued"] is True and "when the Mac wakes" in q["note"]
+    reg.dispatch("tracker_update_task", {"task_id": 9, "title": "renamed"})
+    assert len(tr._outbox()) == 2 and tr.replay() == {"done": 0, "failed": 0, "waiting": 2}        # still asleep: nothing lost
+    assert "2 change(s) you made since are waiting" in json.loads(reg.dispatch("tracker_find_tasks", {"q": "x"})[0])["note"]
+
+    state["awake"], state["refuse"] = True, "/tasks/9"                # the Mac wakes; one change is refused there
+    assert tr.replay() == {"done": 1, "failed": 1, "waiting": 0} and tr._outbox() == []
+    assert state["mac_calls"][0][:2] == ("POST", "/tracker/api/tasks/5/complete")
+    live = json.loads(reg.dispatch("tracker_find_tasks", {"q": "x"})[0])
+    assert "was refused when it was applied" in live["note"] and "no such task" in live["note"] and "live" in json.dumps(live["result"])
+    assert "note" not in json.loads(reg.dispatch("tracker_find_tasks", {"q": "x"})[0])               # told once
+    config.load.cache_clear()
+
+
+def test_tracker_copy_is_a_consistent_snapshot_without_keys(bridge, tmp_path, monkeypatch):
+    import io, sqlite3, tarfile
+    data = tmp_path / "TaskTracker"; data.mkdir()
+    db = sqlite3.connect(data / "tracker.sqlite3"); db.execute("create table tasks(title)"); db.execute("insert into tasks values('carpet')"); db.commit()
+    (data / "env").write_text("ANTHROPIC_API_KEY=secret\n"); (data / "Exercise plan.md").write_text("walk")
+    repo = tmp_path / "repo"; (repo / "dist" / "Project Tracker.app").mkdir(parents=True); (repo / "config.toml").write_text("[general]\n")
+    monkeypatch.setattr(bridge, "TRACKER_DATA", data); monkeypatch.setattr(bridge, "TRACKER_APP", repo / "dist" / "Project Tracker.app")
+    c = TestClient(bridge.app); H = {"X-Bridge-Token": "brtok"}
+    assert c.get("/tracker-copy").status_code == 401
+    r = c.get("/tracker-copy", headers=H)
+    names = tarfile.open(fileobj=io.BytesIO(r.content)).getnames()
+    assert sorted(names) == ["Exercise plan.md", "config.toml", "tracker.sqlite3"] and b"secret" not in r.content
+    assert c.get("/tracker-copy", headers={**H, "If-None-Match": r.headers["etag"]}).status_code == 304      # unchanged
+    db.execute("insert into tasks values('bill specs')"); db.commit()                                         # while "the app" has it open
+    r2 = c.get("/tracker-copy", headers={**H, "If-None-Match": r.headers["etag"]})
+    assert r2.status_code == 200 and r2.headers["etag"] != r.headers["etag"]
+    out = tmp_path / "out"; out.mkdir(); tarfile.open(fileobj=io.BytesIO(r2.content)).extractall(out)
+    assert [x[0] for x in sqlite3.connect(out / "tracker.sqlite3").execute("select title from tasks")] == ["carpet", "bill specs"]

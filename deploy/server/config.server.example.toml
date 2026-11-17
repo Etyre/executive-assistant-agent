@@ -6,6 +6,7 @@
 bridge_url = "http://100.x.y.z:8799"      # the Mac bridge (bridge/mac_bridge.py); the tracker, Focus Monitor and Sleep Bandit stay on the Mac
 direct = ["bandit"]                       # Sleep Bandit runs beside the agent on the server (sleep-bandit/deploy/tailnet)
 bandit_url = "http://bandit:8777"
+tracker_copy_url = "http://tracker:8791"   # the read-only copy of the tracker, for reads while the Mac is asleep
 toggl_source = "toggl"                    # straight from Toggl (TOGGL_API_TOKEN), so time entries do not need the Mac awake
 otter_logseq_graph = ""                   # the Logseq archive is on the Mac and already indexed in data/otter.db
 

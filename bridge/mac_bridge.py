@@ -10,6 +10,7 @@ only, and wants the token in an `X-Bridge-Token` header. It does these things an
   POST /mac/close-tracker  quits it (launcher and Python)
   POST /inbox              appends an LLM-inbox record written on the server to this Mac's inbox, so `llm-inbox`
                            and the page on :8798 show it (the promise in the shared preamble is kept from here)
+  GET  /tracker-copy       a snapshot of the tracker's database, config and documents, for the read-only copy on the server
   GET  /documents          the Markdown files in config.toml's [[document_roots]] (name, size, modified time), and
   GET  /documents/<root>/file?path=...   one of them; the server keeps a copy of each folder up to date from these
 
@@ -21,6 +22,8 @@ Run by hand:  .venv/bin/python bridge/mac_bridge.py        (EA_BRIDGE_HOST=127.0
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import logging
 import os
@@ -28,8 +31,11 @@ import pathlib
 import re
 import secrets
 import signal
+import sqlite3
 import subprocess
 import sys
+import tarfile
+import tempfile
 import tomllib
 
 import httpx
@@ -45,6 +51,7 @@ UPSTREAMS = {
     "bandit": os.environ.get("EA_BANDIT_URL", "http://127.0.0.1:8777"),
 }
 TRACKER_APP = pathlib.Path(os.environ.get("EA_TRACKER_APP") or "~/Documents/agent-coding/project-tracker-and-organizer/dist/Project Tracker.app").expanduser()
+TRACKER_DATA = pathlib.Path(os.environ.get("EA_TRACKER_DATA") or "~/Library/Application Support/TaskTracker").expanduser()
 INBOX = pathlib.Path(os.environ.get("LLM_INBOX_DIR") or pathlib.Path.home() / "Library/Application Support/LLMInbox") / "messages.jsonl"
 # Every write the agent's tracker connector makes (ea/connectors/project_tracker.py); tests/test_bridge.py checks
 # the two stay in step. The daily checklist is read-only for the agent, so it is not here.
@@ -176,6 +183,43 @@ async def inbox(request: Request) -> dict:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     log.warning("inbox record %s from %s (%s) received from the server", rec["id"], rec.get("app"), rec.get("model"))
     return {"ok": True, "id": rec["id"]}
+
+
+@app.get("/tracker-copy")
+def tracker_copy(request: Request) -> Response:
+    """Everything the read-only copy of the tracker on the server needs, as a tar: a consistent snapshot of the
+    database (sqlite's online backup, safe while the app is using it), config.toml and Eli's two documents. No API
+    keys: the copy never calls Toggl, Linear or Claude. The ETag is a hash of the contents, so the server's
+    five-minute check costs one small answer (304) when nothing changed."""
+    _auth(request)
+    db = TRACKER_DATA / "tracker.sqlite3"
+    if not db.exists():
+        raise HTTPException(404, f"no tracker database at {db}")
+    files: dict[str, bytes] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        snap = pathlib.Path(tmp) / "tracker.sqlite3"
+        src, dst = sqlite3.connect(f"file:{db}?mode=ro", uri=True), sqlite3.connect(snap)
+        with dst:
+            src.backup(dst)
+        src.close(); dst.close()
+        files["tracker.sqlite3"] = snap.read_bytes()
+    for name, path in [("config.toml", TRACKER_APP.parents[1] / "config.toml"),
+                       ("Rules and heuristics for scheduling.md", TRACKER_DATA / "Rules and heuristics for scheduling.md"),
+                       ("Exercise plan.md", TRACKER_DATA / "Exercise plan.md")]:
+        if path.is_file():
+            files[name] = path.read_bytes()
+    h = hashlib.sha256()
+    for name in sorted(files):
+        h.update(name.encode()); h.update(files[name])
+    etag = '"' + h.hexdigest()[:32] + '"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name); info.size = len(data); info.mode = 0o600
+            tar.addfile(info, io.BytesIO(data))
+    return Response(buf.getvalue(), media_type="application/x-tar", headers={"ETag": etag})
 
 
 def _roots() -> dict[str, pathlib.Path]:
