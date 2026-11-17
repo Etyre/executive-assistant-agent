@@ -372,9 +372,15 @@ Focus Monitor and Sleep Bandit), the document copy and the LLM-inbox relay throu
 3. `claude setup-token` in a terminal, token into `data/server.env` as `CLAUDE_CODE_OAUTH_TOKEN=...`.
 4. Say go for `cutover --yes`; then set the URL in the iPhone app.
 
-**Not yet verified** (needs the server): provisioning, the `tailscale serve` forward, the move itself, that the
-saved sessions resume under the server's folder name, the bridge reached from the server (and whether the night
-block lets it through between 00:00 and 06:00).
+**Verified on the Mac in a container, 2026-11-17** (image built from HEAD, scratch state): runs as a non-root
+user with the bundled Claude CLI; headless Chromium works; `ea check --llm` read the tracker, calendar, Focus
+Monitor, Sleep Bandit, Oura and Toggl through the bridge on its Tailscale address and got a model reply; a saved
+session resumed after its folder was renamed (what cutover does); `serve` came up healthy, refused a request
+without the token, and copied all 34 documents from the Mac.
+
+**Not yet verified** (needs the server): provisioning, the `tailscale serve` forward, the move itself with the
+real sessions, the bridge reached from another machine (and whether the night block lets it through between
+00:00 and 06:00), the subscription token (the container test used the API key).
 
 **Still on the Mac afterwards:** the Project Tracker, Focus Monitor and Sleep Bandit. With the Mac shut the agent
 answers, keeps its schedule, reads Otter/Roam/calendar/sheets and pushes to the phone, but cannot read or change

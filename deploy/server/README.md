@@ -114,6 +114,8 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
 - **The Mac's night block (00:00 to 06:00) refuses connections to Tailscale addresses from the Mac**, and Docker
   Hub. Whether it also refuses the server's calls into the bridge has not been tested; if the Mac tools fail at
   night while the Mac is awake, that is where to look.
+- **Playwright's bundled Node needs `libatomic1`**, which `python:3.12-slim` lacks; without it the image build
+  stops with exit code 127 and no useful message unless built with `--progress=plain`.
 - **First value wins in a `.env` file**: `env` writes `data/server.env` before `data/.env` so the server's values
   override.
 - `tests/test_bridge.py` fails when the tracker connector gains a write the bridge does not allow; add it to
