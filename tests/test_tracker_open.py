@@ -43,10 +43,18 @@ def test_launch_is_a_no_op_when_running_and_honest_when_it_cannot(tmp_path, monk
     assert not out["ok"] and "did not answer" in out["error"] and opened == [["open", "-g", str(app)]]
 
 
-def test_launch_refuses_through_the_bridge(tmp_path, monkeypatch):
+def test_launch_through_the_bridge_asks_the_mac_to_open_it(tmp_path, monkeypatch):
     t, app, opened = _tracker(tmp_path, monkeypatch, bridge="http://100.1.1.1:8799")
+    asked = []
+    monkeypatch.setattr(t.router, "mac", lambda method, path, body=None: asked.append((method, path)))
+    pings = iter([False, False, True])
+    monkeypatch.setattr(t, "running", lambda: next(pings))
+    assert t.launch()["status"] == "started" and asked == [("POST", "/mac/open-tracker")] and opened == []
+    def away(method, path, body=None):
+        raise SourceError("Eli's Mac is not reachable")
+    monkeypatch.setattr(t.router, "mac", away)
     monkeypatch.setattr(t, "running", lambda: False)
-    assert "bridge" in t.launch()["error"] and opened == []
+    assert "not reachable" in t.launch()["error"]
 
 
 def test_tracker_tools_point_at_tracker_open_when_the_app_is_down(tmp_path, monkeypatch):

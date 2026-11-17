@@ -357,16 +357,29 @@ number, the iPhone rings as a normal call, the agent speaks its opening line and
     about when a call is warranted versus a push notification (a ring is a much bigger interruption).
 11. ~~Voice notes on Telegram~~ dropped with Telegram; the apps use on-device dictation.
 
-## Stage 4: cloud (about an hour, only if still wanted)
+## Stage 4: the agent on a server (Eli, 2026-11-17: "do all the work you can to set up my agent to run on a reputable server")
 
-12. Follow `deploy/gcp/README.md`: the bridge on the Mac (`bridge/install_bridge.sh`), a small VM via
-    `create_vm.sh`, `bootstrap.sh` on the VM, `sources.bridge_url` pointing at the Mac's Tailscale IP. `gcloud`
-    is not installed on this machine yet.
+Built and tested on the Mac side on 2026-11-17; guide: `deploy/server/README.md`. Done: the server image
+(`deploy/Dockerfile`), `deploy/server/atlas-server.sh` (provision, deploy, env, check, cutover, back-to-mac),
+the rewritten Mac bridge (installed under launchd as `com.elityre.ea-bridge`, verified against the real tracker,
+Focus Monitor and Sleep Bandit), the document copy and the LLM-inbox relay through it, `config.server.toml`.
 
-Honest observation on stage 4: the agent's value depends on the Mac being awake and reachable, because all three
-local servers live there. The cloud VM buys an agent that keeps answering and keeps its reminder schedule when
-the laptop is closed, but its data reads fail then. If the laptop is usually on, stages 1 to 3 give nearly
-everything, and the Mac mini later makes it permanent. The cloud step is the one to consider skipping.
+**Needs Eli, in this order:**
+1. Rent the server (Ubuntu 24.04, 2 CPUs, 4 GB, 40 GB, US West, your ssh key, backups on) and give Claude its
+   address. Claude then runs `provision`, `deploy`, `env`, `check`.
+2. During `provision`: open the Tailscale address it prints (adds the server to your network), and add the
+   printed public key as a read-only deploy key on the Roam backup repository on GitHub.
+3. `claude setup-token` in a terminal, token into `data/server.env` as `CLAUDE_CODE_OAUTH_TOKEN=...`.
+4. Say go for `cutover --yes`; then set the URL in the iPhone app.
+
+**Not yet verified** (needs the server): provisioning, the `tailscale serve` forward, the move itself, that the
+saved sessions resume under the server's folder name, the bridge reached from the server (and whether the night
+block lets it through between 00:00 and 06:00).
+
+**Still on the Mac afterwards:** the Project Tracker, Focus Monitor and Sleep Bandit. With the Mac shut the agent
+answers, keeps its schedule, reads Otter/Roam/calendar/sheets and pushes to the phone, but cannot read or change
+tasks, focus data or sleep data until the Mac wakes. Moving the tracker's server to the same machine is the next
+step if that matters in practice.
 
 ## Decisions to make rather than default
 

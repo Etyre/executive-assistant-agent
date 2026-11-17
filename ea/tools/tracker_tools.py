@@ -37,7 +37,9 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
             try:
                 return fn(*a, **k)
             except SourceError as e:
-                if "Connect" in str(e):
+                # Three ways "the app is down" arrives: a refused connection, the bridge's 502 (server deployment),
+                # and nightblock's proxy answering 502 for localhost while the night block is on.
+                if any(w in str(e) for w in ("Connect", "not answering on the Mac", "could not reach")):
                     return {"error": f"the Project Tracker app is not answering ({str(e)[:120]}); start it with tracker_open, then retry"}
                 raise
         run.__name__ = fn.__name__

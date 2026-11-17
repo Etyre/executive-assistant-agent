@@ -66,6 +66,11 @@ def check(*, model: str, system: Any, messages: Any, content: list[dict[str, Any
         log.exception("llm inbox check failed")
         return None
     log.warning("the model contacted Eli (inbox %s via %s): %s", rec["id"], rec["via"], rec["message"][:300])
+    try:                                                   # on a server: copy it to the inbox on the Mac
+        from . import inbox_relay
+        inbox_relay.forward()
+    except Exception:  # noqa: BLE001
+        log.exception("inbox relay failed; the scheduler will try again")
     return rec
 
 

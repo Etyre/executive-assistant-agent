@@ -40,6 +40,8 @@ class Scheduler:
         self.tz = ZoneInfo(self.s.timezone)
         self.rng = rng or random.Random()
         self._now_fn = now_fn
+        self._relay_at = 0.0                   # last time the inbox relay ran (server deployment only)
+        self._mirror_at = 0.0                  # last time the document folders were copied from the Mac (same)
 
     def now(self) -> dt.datetime:
         return self._now_fn() if self._now_fn else dt.datetime.now(self.tz)
@@ -237,10 +239,24 @@ class Scheduler:
             self.ingest_otter(now)
         except Exception:  # noqa: BLE001
             log.exception("otter ingestion failed")
+        if self.s.sources.bridge_url and time.time() - self._mirror_at > 120:
+            self._mirror_at = time.time()
+            try:
+                from .. import docs_mirror
+                docs_mirror.sync(self.s)                # before the watch below, so an edit on the Mac is noticed here
+            except Exception:  # noqa: BLE001
+                log.exception("document mirror failed")
         try:
             self.watch_documents(now)
         except Exception:  # noqa: BLE001
             log.exception("document watch failed")
+        if self.s.sources.bridge_url and time.time() - self._relay_at > 300:
+            self._relay_at = time.time()
+            try:
+                from .. import inbox_relay
+                inbox_relay.forward(self.s)             # inbox records made while the Mac was asleep
+            except Exception:  # noqa: BLE001
+                log.exception("inbox relay failed")
         roam = getattr(self.agent, "roam", None)
         if roam is not None and self.s.sources.roam_backup_git:
             try:

@@ -253,12 +253,17 @@ stops. Only the access-token field is excluded.
 - Secrets live in `data/.env` (mode 600) or the environment, never in config or code. `data/` is gitignored.
 - The agent's writes are limited to the Project Tracker and its own memory/reminders; every tool call is logged.
 
-### Deploying elsewhere
+### Running on a server
 
-- **Google Cloud**: `deploy/gcp/README.md` (small VM + Docker + Tailscale; the Mac runs the bridge). The Docker
-  image needs a copy of `agent-coding/shared/` and `EA_SHARED_DIR` pointing at it (the LLM standard above).
-- **Mac mini later**: copy the repo and `data/`, set `sources.bridge_url = ""`, run `deploy/macmini/install.sh`.
-- Same `deploy/docker-compose.yml` works in both places.
+`deploy/server/README.md` is the guide. In short: one Docker container on an Ubuntu server, reachable only over
+Tailscale; the Mac runs a small bridge (`bridge/mac_bridge.py`) through which the server reads the Project
+Tracker, Focus Monitor and Sleep Bandit, copies the document folders, asks for the tracker to be opened, and
+files LLM-inbox messages back into the Mac's inbox. `deploy/server/atlas-server.sh` provisions, deploys, and
+moves the agent there (`cutover`) and back (`back-to-mac`); only one copy ever runs. `config.server.toml` is laid
+over `config.toml` on the server (`EA_CONFIG_OVERLAY`). When the Mac is asleep the Mac-only tools say so in plain
+words and everything else carries on.
+
+- **Mac mini later**: copy the repo and `data/`, leave `sources.bridge_url` empty, run `deploy/macmini/install.sh`.
 
 ## Files
 
@@ -287,8 +292,9 @@ stops. Only the access-token field is excluded.
 | `instructions/` | `STANDING_INSTRUCTIONS.md`, `USER_SYSTEM_PROMPT.md`, `MEMORY_CONVENTIONS.md`, `habits/*.md` (one file per habit + README and example) |
 | `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs, installs into /Applications and relaunches the Mac app; own README) |
 | `apps/Atlas/auto_deploy.py`, `install-auto-deploy.sh` | launchd agent `com.elityre.atlas-app-deploy`: builds each new commit of the Mac app and installs it in /Applications once the agent is not mid-turn |
-| `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: lets a cloud agent reach the Mac's local servers over Tailscale |
-| `deploy/` | `Dockerfile`, `docker-compose.yml`, `gcp/` (VM scripts + README), `macmini/` (launchd plist + `install.sh`), `calendar_script/` (`Code.gs` + manifest: the Google Apps Script that gives the agent calendar write access; setup steps at the top of `Code.gs`), `sheet_reader_script/` (the read-only script bound to each Google Sheet the agent may read) |
+| `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: what the Mac does for an agent running on a server (the three local services, document folders, opening the tracker, receiving LLM-inbox records), on the Tailscale address only |
+| `ea/inbox_relay.py`, `ea/docs_mirror.py` | Server deployment only: copy LLM-inbox records to the Mac, and the Mac's document folders to the server, both through the bridge |
+| `deploy/` | `Dockerfile`, `docker-compose.yml`, `server/` (`atlas-server.sh`: provision, deploy, move the agent to a server and back; own README; `config.server.example.toml`), `macmini/` (launchd plist + `install.sh`), `calendar_script/` (`Code.gs` + manifest: the Google Apps Script that gives the agent calendar write access; setup steps at the top of `Code.gs`), `sheet_reader_script/` (the read-only script bound to each Google Sheet the agent may read) |
 | `ios/SHORTCUT.md` | Action button / Siri setup |
 | `scripts/import_tracker_settings.py` | Copies the exercise export URL and calendar feeds from the Project Tracker's config into `data/.env` |
 | `tests/` | pytest suite (no network, scripted model); `test_llm_contact.py` covers the LLM inbox on both engines, `test_fast_mode.py` which turns are fast |
@@ -309,6 +315,8 @@ stops. Only the access-token field is excluded.
 - **Logs**: `~/Library/Logs/executive-assistant.log` (launchd stdout+stderr, every line timestamped). Copies
   installed before 2026-11-07 still log to `data/ea.log` until `deploy/macmini/install.sh` is rerun. The bridge
   logs to `~/Library/Logs/ea-bridge.log`.
+- **Server deployment**: see `deploy/server/README.md` (code in `/opt/atlas/app`, state in `/opt/atlas/data`). On the
+  Mac: server-only secrets in `data/server.env`, the differences in `config.server.toml`, both untracked.
 - **LLM inbox** (shared across projects): `~/Library/Application Support/LLMInbox/` (messages, config, debriefs);
   its log is `~/Library/Logs/llm-inbox.log`.
 - **Web chat / API**: `http://127.0.0.1:8800/` (`/health`, `/api/events`, `/api/message`, …).
@@ -483,3 +491,8 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   first run marks all existing recordings as seen (history is not news).
 - The shared `llm_contact.py` is imported from `~/Documents/agent-coding/shared` (`EA_SHARED_DIR` overrides); a
   Docker image without it fails at import on purpose rather than running without the preamble.
+- While the night block is on, nightblock's proxy answers 502 "could not reach" for a local service that is down
+  (instead of a refused connection), so "the tracker is not running" has three spellings; `tracker_tools.guard`
+  knows all three. `tests/test_tracker_open.py` fails at night without that.
+- Server deployment gotchas (root and the Claude CLI, Docker and ufw, HOME on the data volume, session folder
+  names, the night block and Tailscale) are in `deploy/server/README.md`.

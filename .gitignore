@@ -43,3 +43,4 @@ apps/Atlas/Atlas.xcodeproj/
 apps/Atlas/build/
 *.xcuserstate
 apps/Atlas/build-ios/
+config.server.toml

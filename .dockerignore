@@ -1,0 +1,10 @@
+# The image is built from a staged export of HEAD, but if someone builds from the working tree, keep state,
+# secrets and the Mac apps out of the build context.
+data/
+config.toml
+.venv/
+.git/
+apps/
+**/__pycache__/
+*.log
+.env

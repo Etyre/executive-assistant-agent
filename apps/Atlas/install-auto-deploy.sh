@@ -3,6 +3,8 @@
 # commit of the Mac app is built and put in /Applications as soon as the agent is not mid-turn. Idempotent.
 #   state: ~/Library/Application Support/AtlasAppDeploy/     log: ~/Library/Logs/atlas-app-deploy.log
 #   ./install-auto-deploy.sh --uninstall   stops and removes it
+#   ATLAS_HEALTH_URL=http://atlas.<tailnet>.ts.net:8800/health ./install-auto-deploy.sh
+#       when the agent runs on a server: "is the agent mid-turn?" is asked there (atlas-server.sh cutover does this)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LABEL=com.elityre.atlas-app-deploy
@@ -25,7 +27,8 @@ cat > "$PLIST" <<PLIST
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HOME</key><string>$HOME</string>
-  </dict>
+${ATLAS_HEALTH_URL:+    <key>ATLAS_HEALTH_URL</key><string>$ATLAS_HEALTH_URL</string>
+}  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>

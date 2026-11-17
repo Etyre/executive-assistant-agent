@@ -58,7 +58,15 @@ def _tracker(s: config.Settings) -> tuple[str, str]:
 def _local(url_attr: str, name: str) -> Callable[[config.Settings], tuple[str, str]]:
     def probe(s: config.Settings) -> tuple[str, str]:
         import httpx
-        from .connectors.http import ServiceRouter
+        from .connectors.http import ServiceRouter, SourceError
+        router = ServiceRouter(s)
+        if router.bridge:                                   # on a server: ask through the bridge on the Mac
+            try:
+                with router.client(url_attr.removesuffix("_url")) as c:
+                    c.get("/", timeout=5)
+                return "ok", f"{name} answering through the Mac bridge"
+            except (httpx.HTTPError, SourceError) as e:
+                return "missing", f"{name} not reachable through the Mac bridge ({type(e).__name__}); the Mac must be awake with it running"
         url = getattr(s.sources, url_attr)
         try:
             r = httpx.get(url.rstrip("/") + "/", timeout=3)
@@ -143,8 +151,11 @@ def _documents(s: config.Settings) -> tuple[str, str]:
 def _browser(s: config.Settings) -> tuple[str, str]:
     if not s.sources.web_browsing:
         return "off", "disabled in config"
+    import os
     import pathlib as _p
-    cache = _p.Path.home() / "Library/Caches/ms-playwright"
+    import sys
+    # Where Playwright keeps its browsers: its own variable (the Docker image sets it), else the platform default.
+    cache = _p.Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or _p.Path.home() / ("Library/Caches/ms-playwright" if sys.platform == "darwin" else ".cache/ms-playwright"))
     have = any(p.name.startswith("chromium") for p in cache.glob("*")) if cache.exists() else False
     return ("ok", "headless Chromium installed") if have else ("missing", "run `.venv/bin/python -m playwright install chromium`")
 

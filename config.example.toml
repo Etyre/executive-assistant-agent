@@ -31,7 +31,8 @@ max_tool_rounds = 20
 
 [sources]
 toggl_source = "focus_monitor"   # or "toggl": call Toggl's API directly (needs TOGGL_API_TOKEN)
-# Cloud deployment: reach the Mac through the bridge over Tailscale.
+# Server deployment: reach the Mac through the bridge over Tailscale. Set in config.server.toml, not here
+# (deploy/server/config.server.example.toml); this file is the same on the Mac and the server.
 bridge_url = ""                 # e.g. "http://100.101.102.103:8799"; empty = talk to localhost directly
 # Mac / Mac mini deployment: direct.
 tracker_url = "http://127.0.0.1:8791"

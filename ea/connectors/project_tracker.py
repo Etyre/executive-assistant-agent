@@ -51,22 +51,29 @@ class ProjectTracker:
             return False
 
     def launch(self, wait_seconds: float = 20.0) -> dict[str, Any]:
-        """Start the Project Tracker app when its API is not answering. Only possible on the Mac itself (through
-        the bridge the app is on another machine). `open -g` so the window does not take the user's focus."""
+        """Start the Project Tracker app when its API is not answering (on a server, the bridge on the Mac does
+        the opening). `open -g` so the window does not take the user's focus."""
         if self.running():
             return {"ok": True, "status": "already running"}
-        if self.router.bridge:
-            return {"ok": False, "error": "the tracker is reached through the Mac bridge; it can only be started on the Mac itself"}
+        if self.router.bridge:                                # on a server: ask the bridge on the Mac to open it
+            try:
+                self.router.mac("POST", "/mac/open-tracker")
+            except SourceError as e:
+                return {"ok": False, "error": str(e)}
+            return self._wait_running(wait_seconds, "the Project Tracker")
         app = pathlib.Path(self.app_path).expanduser()
         if not app.exists():
             return {"ok": False, "error": f"tracker app not found at {app}; set sources.tracker_app"}
         subprocess.run(["open", "-g", str(app)], check=True, timeout=15)
+        return self._wait_running(wait_seconds, app.name)
+
+    def _wait_running(self, wait_seconds: float, name: str) -> dict[str, Any]:
         t0 = time.time()
         while time.time() - t0 < wait_seconds:
             if self.running():
                 return {"ok": True, "status": "started", "seconds": round(time.time() - t0, 1)}
             time.sleep(1)
-        return {"ok": False, "error": f"opened {app.name} but its API did not answer within {wait_seconds:.0f}s; see launcher.log in its data folder"}
+        return {"ok": False, "error": f"opened {name} but its API did not answer within {wait_seconds:.0f}s; see launcher.log in its data folder"}
 
     def tree(self) -> dict[str, Any]:
         """{projects: [{id, parent_id, name, path, notes, source, open_tasks, notes_added}], tree: nested}"""

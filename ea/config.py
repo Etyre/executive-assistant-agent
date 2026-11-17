@@ -19,6 +19,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA_DIR = pathlib.Path(os.environ.get("EA_DATA") or ROOT / "data").expanduser()
 CONFIG_PATH = pathlib.Path(os.environ.get("EA_CONFIG") or ROOT / "config.toml").expanduser()
 INSTRUCTIONS_DIR = pathlib.Path(os.environ.get("EA_INSTRUCTIONS") or ROOT / "instructions").expanduser()
+# Optional second TOML file laid over config.toml (EA_CONFIG_OVERLAY): how the server deployment differs from
+# the Mac (bridge address, where the synced documents are) while both keep the same config.toml.
+OVERLAY_PATH = pathlib.Path(os.environ["EA_CONFIG_OVERLAY"]).expanduser() if os.environ.get("EA_CONFIG_OVERLAY") else None
 
 
 def _load_env_file(path: pathlib.Path) -> None:
@@ -135,8 +138,9 @@ class DocumentRoot:
     """A folder of Markdown the agent can list and read live, beside instructions/. Read at request time, so the
     agent always sees the current file: nothing is copied or synced."""
     name: str                                 # prefix the agent uses: read_document "<name>/<file>.md"
-    path: str                                 # folder on this Mac
+    path: str                                 # folder on this machine
     note: str = ""                            # one line telling the agent what the folder is
+    from_mac: bool = False                    # server deployment: `path` is a copy kept up to date from the Mac through the bridge (ea/docs_mirror.py)
 
 
 @dataclasses.dataclass
@@ -241,11 +245,21 @@ def _merge(dc: Any, raw: dict) -> Any:
     return dc
 
 
+def _overlay(base: dict, over: dict) -> dict:
+    """`over` on top of `base`: tables merge key by key, everything else (lists of tables included) is replaced."""
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _overlay(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
 @lru_cache(maxsize=1)
 def load() -> Settings:
     s = Settings()
     if CONFIG_PATH.exists():
         raw = tomllib.loads(CONFIG_PATH.read_text())
+        if OVERLAY_PATH and OVERLAY_PATH.exists():          # the server's few differences, on top of the same config
+            raw = _overlay(raw, tomllib.loads(OVERLAY_PATH.read_text()))
         checks = raw.pop("checks", [])
         roots = raw.pop("document_roots", [])
         _merge(s, raw)

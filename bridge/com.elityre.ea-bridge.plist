@@ -6,12 +6,13 @@
     <string>__REPO__/.venv/bin/python</string>
     <string>__REPO__/bridge/mac_bridge.py</string>
   </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
   <key>EnvironmentVariables</key><dict>
-    <key>EA_BRIDGE_TOKEN</key><string>__TOKEN__</string>
     <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>StandardOutPath</key><string>__HOME__/Library/Logs/ea-bridge.log</string>
   <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ea-bridge.log</string>
 </dict></plist>

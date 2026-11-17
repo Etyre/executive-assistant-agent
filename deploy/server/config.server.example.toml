@@ -1,0 +1,15 @@
+# How the server differs from the Mac. Laid over config.toml (EA_CONFIG_OVERLAY): a table here changes only the
+# keys it names; a list of tables ([[document_roots]]) replaces the whole list.
+# Copy to config.server.toml (untracked) and fill in the Mac's Tailscale address: `tailscale ip -4` on the Mac.
+
+[sources]
+bridge_url = "http://100.x.y.z:8799"      # the Mac bridge (bridge/mac_bridge.py); the tracker, Focus Monitor and Sleep Bandit stay on the Mac
+otter_logseq_graph = ""                   # the Logseq archive is on the Mac and already indexed in data/otter.db
+
+# from_mac: the folder is on the Mac; the server keeps a copy in /opt/atlas/data/docs/<name>, refreshed through the
+# bridge every two minutes while the Mac is awake (ea/docs_mirror.py).
+[[document_roots]]
+name = "elityre.com"
+path = "/data/docs/elityre.com"
+from_mac = true
+note = "the Markdown sources of Eli's personal website: his written policies, principles, habits, routines, priorities and history; treat as his considered, public statements"

@@ -1,18 +1,28 @@
-# Same file for the GCP VM and the Mac mini. State (memory, transcripts, SQLite) lives in ./data on the host.
+# The agent on a server. Layout there (made by deploy/server/atlas-server.sh):
+#   /opt/atlas/app                 this repo at HEAD, plus shared/
+#   /opt/atlas/data                the agent's state, secrets (.env) and home folder    (never rebuilt, never deleted)
+#   /opt/atlas/config.toml         the same file as on the Mac
+#   /opt/atlas/config.server.toml  how the server differs (deploy/server/config.server.example.toml)
 services:
   ea:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    container_name: ea
+    image: atlas-agent
+    container_name: atlas
     restart: unless-stopped
-    env_file: ../data/.env
+    init: true
+    shm_size: 1gb                  # headless Chromium needs more than Docker's 64 MB of shared memory
+    environment:
+      TZ: ${ATLAS_TZ:-America/Los_Angeles}
     volumes:
-      - ../data:/data
-      - ../instructions:/app/instructions
-      - ../config.toml:/app/config.toml:ro
+      - ${ATLAS_ROOT:-/opt/atlas}/data:/data
+      - ${ATLAS_ROOT:-/opt/atlas}/config.toml:/app/config.toml:ro
+      - ${ATLAS_ROOT:-/opt/atlas}/config.server.toml:/app/config.server.toml:ro
+    # Only this machine. Tailscale forwards the tailnet's port 8800 here (`tailscale serve`), so the agent is
+    # reachable from Eli's devices and from nowhere else. Never publish this on 0.0.0.0: Docker bypasses ufw.
     ports:
-      - "8800:8800"
-    # On a Mac mini where the data servers run on the host, let the container reach them:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "${ATLAS_BIND:-127.0.0.1}:${ATLAS_PORT:-8800}:8800"
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
