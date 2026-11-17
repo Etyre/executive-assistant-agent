@@ -136,3 +136,28 @@ def test_documents_store_and_endpoints(monkeypatch):
     assert c.get("/api/workspace", headers=H).json()["name"] == "workspace"            # the old endpoint still serves the whiteboard
     assert c.delete("/api/docs/Notes", headers=H).json()["ok"] is True
     assert c.delete("/api/docs/workspace", headers=H).status_code == 400
+
+
+def test_documents_can_be_read_from_many_threads_at_once():
+    """All documents share one database connection and the web server reads from several threads: two overlapping
+    reads raised sqlite3.InterfaceError and the app's document list came back as a 500 (2026-11-16)."""
+    import tempfile, threading
+    from ea.workspace import Documents
+    config.load.cache_clear()
+    d = pathlib.Path(tempfile.mkdtemp())
+    docs = Documents(config.load(), folder=d / "workspace", db_path=d / "state.db")
+    for i in range(6):
+        docs.get(f"Doc {i} - shareable").write("# doc\n\n" + "x" * 2000 * (i + 1), by="agent")
+    errors = []
+
+    def hammer():
+        try:
+            for _ in range(60):
+                assert len(docs.names()) == 6
+                docs.get("Doc 3 - shareable").history()
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+    threads = [threading.Thread(target=hammer) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []

@@ -235,9 +235,10 @@ struct API {
         }
     }
 
-    private func encoded(_ name: String) -> String {
-        name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-    }
+    /// A document's name as a path piece. Not percent-encoded here: `request` builds the URL with
+    /// appendingPathComponent, which encodes it. Encoding it here as well sent "Locked-in%2520day" for
+    /// "Locked-in day", and the server refused every document with a space in its name (HTTP 400; Eli, 2026-11-16).
+    private func encoded(_ name: String) -> String { name }
 
     func workspace(_ name: String = "workspace") async throws -> WorkspaceDoc {
         let (data, resp) = try await session.data(for: request("api/docs/\(encoded(name))"))

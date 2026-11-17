@@ -48,6 +48,17 @@ def _version(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
 
 
+# One lock for every use of the connection. All documents share one connection and the web server reads from several
+# threads at once; two overlapping executes raised "sqlite3.InterfaceError: bad parameter or other API misuse" and the
+# app's document list came back as a 500 (seen 2026-11-16).
+_DB = threading.RLock()
+
+
+def _rows(conn: sqlite3.Connection, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
+    with _DB:
+        return conn.execute(sql, args).fetchall()
+
+
 def _connect(db_path: pathlib.Path) -> sqlite3.Connection:
     conn = sqlite3.connect(pathlib.Path(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -74,31 +85,31 @@ class Workspace:
             text = DEFAULT if default is None else default
             self.path.write_text(text, encoding="utf-8")
             self._record(text, "system", "created")
-        elif not self._conn.execute("SELECT 1 FROM workspace_versions WHERE doc=? LIMIT 1", (self.name,)).fetchone():
+        elif not _rows(self._conn, "SELECT 1 FROM workspace_versions WHERE doc=? LIMIT 1", (self.name,)):
             self._record(self.path.read_text(encoding="utf-8"), "system", "imported")     # a file that appeared on disk
 
     # ------------------------------------------------------------------ reading
     def read(self) -> dict[str, Any]:
         text = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
         v = _version(text)
-        last = self._conn.execute("SELECT ts, by, note FROM workspace_versions WHERE doc=? AND version=? ORDER BY id DESC LIMIT 1", (self.name, v)).fetchone()
+        last = next(iter(_rows(self._conn, "SELECT ts, by, note FROM workspace_versions WHERE doc=? AND version=? ORDER BY id DESC LIMIT 1", (self.name, v))), None)
         return {"name": self.name, "text": text, "version": v, "chars": len(text),
                 "updated_at": dt.datetime.fromtimestamp(last["ts"]).isoformat(timespec="seconds") if last else
                 dt.datetime.fromtimestamp(self.path.stat().st_mtime).isoformat(timespec="seconds") if self.path.exists() else None,
                 "updated_by": last["by"] if last else "outside the app"}
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
-        rows = self._conn.execute("SELECT version, ts, by, note, length(text) AS chars FROM workspace_versions WHERE doc=? ORDER BY id DESC LIMIT ?", (self.name, limit))
+        rows = _rows(self._conn, "SELECT version, ts, by, note, length(text) AS chars FROM workspace_versions WHERE doc=? ORDER BY id DESC LIMIT ?", (self.name, limit))
         return [{"version": r["version"], "at": dt.datetime.fromtimestamp(r["ts"]).isoformat(timespec="seconds"), "by": r["by"],
                  "note": r["note"], "chars": r["chars"]} for r in rows]
 
     def version_text(self, version: str) -> str | None:
-        r = self._conn.execute("SELECT text FROM workspace_versions WHERE doc=? AND version=? ORDER BY id DESC LIMIT 1", (self.name, version)).fetchone()
+        r = next(iter(_rows(self._conn, "SELECT text FROM workspace_versions WHERE doc=? AND version=? ORDER BY id DESC LIMIT 1", (self.name, version))), None)
         return r["text"] if r else None
 
     # ------------------------------------------------------------------ writing
     def _record(self, text: str, by: str, note: str) -> None:
-        with self._conn:
+        with _DB, self._conn:
             self._conn.execute("INSERT INTO workspace_versions(version, ts, by, note, text, doc) VALUES(?,?,?,?,?,?)", (_version(text), time.time(), by, note, text, self.name))
             self._conn.execute("DELETE FROM workspace_versions WHERE doc=? AND id NOT IN (SELECT id FROM workspace_versions WHERE doc=? ORDER BY id DESC LIMIT ?)", (self.name, self.name, KEEP))
 

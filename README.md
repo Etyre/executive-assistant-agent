@@ -390,6 +390,13 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 
 ## Gotchas learned
 
+- **A document with a space in its name would not open in the app (HTTP 400 "document names are...").** The app
+  percent-encoded the name and then built the URL with `appendingPathComponent`, which encodes again: the server
+  got `Locked-in%20day`, literally, and refused it. Only `workspace` had ever been opened, so it went unnoticed
+  until the agent made "Locked-in day - shareable" (2026-11-16). In the server log the sign is `%2520` in the path.
+- **The document list sometimes failed with a 500** (`sqlite3.InterfaceError: bad parameter or other API misuse`):
+  all documents share one SQLite connection and the web server reads it from several threads. Every use now holds
+  one lock (`ea/workspace.py`, `_DB`).
 - **A message typed while a background turn ran vanished from the chat and looked unsent.** The agent got it (it is
   handed to the running turn), but it was stored under that turn's channel, `scheduler`, which the chat history
   hides; and the server said "done" before it was stored at all, so the app's history reload dropped it from the
