@@ -7,6 +7,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 LABEL=com.elityre.ea-bridge
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+# bootout returns before the job is gone; bootstrapping too soon fails with "Bootstrap failed: 5" (seen 2026-11-17)
+for _ in 1 2 3 4 5 6 7 8 9 10; do launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break; sleep 1; done
 if [ "${1:-}" = "--uninstall" ]; then rm -f "$PLIST"; echo "removed $LABEL"; exit 0; fi
 
 ENV="$REPO/data/.env"
