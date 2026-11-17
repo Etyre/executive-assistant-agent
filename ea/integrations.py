@@ -60,7 +60,7 @@ def _local(url_attr: str, name: str) -> Callable[[config.Settings], tuple[str, s
         import httpx
         from .connectors.http import ServiceRouter, SourceError
         router = ServiceRouter(s)
-        if router.bridge:                                   # on a server: ask through the bridge on the Mac
+        if router.via_bridge(url_attr.removesuffix("_url")):    # on a server: ask through the bridge on the Mac
             try:
                 with router.client(url_attr.removesuffix("_url")) as c:
                     c.get("/", timeout=5)

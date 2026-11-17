@@ -242,3 +242,14 @@ def test_focus_monitor_answers_from_its_kept_copy_when_the_mac_is_away(tmp_path,
     s.sources.bridge_url = ""
     assert fm.FocusMonitor(ServiceRouter(s)).cache_path is None
     config.load.cache_clear()
+
+
+def test_a_direct_service_skips_the_bridge():
+    from ea import config
+    from ea.connectors.http import ServiceRouter
+    config.load.cache_clear()
+    s = config.load(); s.sources.bridge_url = "http://mac:8799"; s.sources.direct = ["bandit"]; s.sources.bandit_url = "http://bandit:8777"
+    r = ServiceRouter(s); r.token = "t"
+    assert str(r.client("bandit").base_url).rstrip("/") == "http://bandit:8777" and "x-bridge-token" not in r.client("bandit").headers
+    assert str(r.client("focus").base_url).rstrip("/") == "http://mac:8799/focus" and r.via_bridge("tracker")
+    config.load.cache_clear()

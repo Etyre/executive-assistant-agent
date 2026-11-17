@@ -69,7 +69,7 @@ class ProjectTracker:
         the opening). `open -g` so the window does not take the user's focus."""
         if self.running():
             return {"ok": True, "status": "already running"}
-        if self.router.bridge:                                # on a server: ask the bridge on the Mac to open it
+        if self.router.via_bridge("tracker"):                 # on a server: ask the bridge on the Mac to open it
             try:
                 self.router.mac("POST", "/mac/open-tracker")
             except SourceError as e:

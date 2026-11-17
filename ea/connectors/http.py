@@ -23,8 +23,12 @@ class ServiceRouter:
         self.bridge = self.s.bridge_url.rstrip("/")
         self.token = config.secret(self.s.bridge_token_env)
 
+    def via_bridge(self, service: str) -> bool:
+        """Through the Mac bridge, unless the service runs beside the agent (`sources.direct`)."""
+        return bool(self.bridge) and service not in self.s.direct
+
     def client(self, service: str) -> httpx.Client:
-        if self.bridge:
+        if self.via_bridge(service):
             if not self.token:
                 raise SourceError(f"{self.s.bridge_token_env} is not set but sources.bridge_url is")
             return httpx.Client(base_url=f"{self.bridge}/{service}", timeout=self.s.timeout_seconds,
