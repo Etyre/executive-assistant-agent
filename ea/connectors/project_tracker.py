@@ -37,6 +37,10 @@ def app_pids(app: pathlib.Path) -> list[int]:
     return [pid for _, pid in sorted(found)]
 
 
+BESIDE = ("The Project Tracker's server runs on the server beside you, not as an app on Eli's Mac, so there is nothing "
+          "for you to open or close. If it is not answering, tell Eli: `deploy/tailnet/server.sh status` in the tracker's project.")
+
+
 class ProjectTracker:
     def __init__(self, router: ServiceRouter, settings: config.Settings | None = None):
         self.router = router
@@ -69,6 +73,8 @@ class ProjectTracker:
         the opening). `open -g` so the window does not take the user's focus."""
         if self.running():
             return {"ok": True, "status": "already running"}
+        if self._beside():
+            return {"ok": False, "error": BESIDE}
         if self.router.via_bridge("tracker"):                 # on a server: ask the bridge on the Mac to open it
             try:
                 self.router.mac("POST", "/mac/open-tracker")
@@ -85,9 +91,11 @@ class ProjectTracker:
         """Quit the Project Tracker app (the opposite of launch). Its API, menu bar item and timer go with it. The
         app is a native launcher plus the Python it runs, and the launcher restarts Python when Python alone dies,
         so both are stopped, launcher first (the tracker's README, "quit both")."""
+        if self._beside():
+            return {"ok": False, "error": BESIDE}
         if not self.running():
             return {"ok": True, "status": "already closed"}
-        if self.router.bridge:
+        if self.router.via_bridge("tracker"):
             try:
                 self.router.mac("POST", "/mac/close-tracker")
             except SourceError as e:
@@ -107,6 +115,10 @@ class ProjectTracker:
                 return {"ok": True, "status": "closed", "seconds": round(time.time() - t0, 1)}
             time.sleep(1)
         return {"ok": False, "error": f"asked the Project Tracker to quit but its API still answers after {wait_seconds:.0f}s"}
+
+    def _beside(self) -> bool:
+        """The tracker's server runs on this machine's side (sources.direct), not as an app on the Mac."""
+        return bool(self.router.bridge) and not self.router.via_bridge("tracker")
 
     def _wait_running(self, wait_seconds: float, name: str) -> dict[str, Any]:
         t0 = time.time()

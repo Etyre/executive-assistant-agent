@@ -97,6 +97,9 @@ EOS
     say "joining your Tailscale network: open the address printed below and approve the machine"
     r "$SUDO tailscale up --hostname=atlas"
   fi
+  # The tools that moved here from the Mac keep the Mac's time zone (follow-mac-timezone.sh says why).
+  scp -q "$REPO/deploy/server/follow-mac-timezone.sh" "$SERVER:/tmp/follow-mac-timezone.sh"
+  r "$SUDO install -m 755 /tmp/follow-mac-timezone.sh /opt/atlas/follow-mac-timezone.sh && echo '*/10 * * * * root /opt/atlas/follow-mac-timezone.sh >> /var/log/follow-mac-timezone.log 2>&1' | $SUDO tee /etc/cron.d/follow-mac-timezone >/dev/null"
   # The tailnet's port 8800 is handed to the agent, which itself listens on this machine only.
   r "$SUDO tailscale serve --bg --tcp=8800 tcp://localhost:8800" || echo "!! 'tailscale serve' failed; the agent will not be reachable from your devices until it works"
   say "done. The agent will be at $(srv_url) once it is moved here."

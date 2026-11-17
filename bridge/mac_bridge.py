@@ -114,9 +114,18 @@ def _auth(request: Request) -> None:
         raise HTTPException(401, "bad token")
 
 
+def _timezone() -> str:
+    """This Mac's time zone name (America/New_York). The server's follow-mac-timezone.sh reads it from /health so
+    the tools that moved there (tracker, Sleep Bandit) keep their days and hours where Eli is."""
+    try:
+        return os.readlink("/etc/localtime").split("/zoneinfo/", 1)[1]
+    except (OSError, IndexError):
+        return ""
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "services": list(UPSTREAMS)}
+    return {"ok": True, "services": list(UPSTREAMS), "tz": _timezone()}
 
 
 @app.post("/mac/open-tracker")
