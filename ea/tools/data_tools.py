@@ -10,6 +10,7 @@ from ..connectors.focus_monitor import FocusMonitor
 from ..connectors.http import ServiceRouter
 from ..connectors.project_tracker import ProjectTracker
 from ..connectors.sleep_bandit import OURA_COLLECTIONS, SleepBandit
+from ..connectors.sheet_reader import SheetReader
 from ..connectors.toggl import Toggl
 from .registry import ToolRegistry
 
@@ -18,6 +19,26 @@ DAYS = {"type": "integer", "minimum": 1, "description": "How many days back to l
 
 def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: Exercise, calendar: Calendar | None = None) -> None:
     focus, bandit = FocusMonitor(router), SleepBandit(router)
+    blocks = SheetReader()
+
+    @reg.tool("sheets_available", "The Google Sheets the user has opened to you, read-only (for one, his own log of "
+              "intentionality blocks and work blocks, filled in through a form after each block): each sheet's name "
+              "to use with sheet_records, its title, and every tab's row count and column headers.")
+    def sheets_available() -> Any:
+        return blocks.describe() if blocks.enabled() else {"error": "no readable sheets are set up (READ_SHEETS, READ_SHEETS_TOKEN)"}
+
+    @reg.tool("sheet_records", "Rows of one of the user's read-only Google Sheets (names from sheets_available): the last "
+              "`last` records, oldest first (default 20, max 1000), each as column -> value with empty cells left out, "
+              "plus total_rows. `offset` skips that many from the end to page further back; `tab` picks a tab other "
+              "than the first.",
+              {"properties": {"sheet": {"type": "string"}, "last": {"type": "integer", "minimum": 1, "maximum": 1000},
+                              "offset": {"type": "integer", "minimum": 0}, "tab": {"type": "string"}}, "required": ["sheet"]})
+    def sheet_records(sheet: str, last: int = 20, offset: int = 0, tab: str | None = None) -> Any:
+        from ..connectors.http import SourceError
+        try:
+            return blocks.rows(sheet, last, offset, tab)
+        except SourceError as e:
+            return {"error": str(e)}
     calendar = calendar or Calendar(tracker=ProjectTracker(router))
 
     @reg.tool("toggl_current", "The Toggl time entry running right now (what the user says they are doing), or null.")

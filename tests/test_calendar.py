@@ -133,3 +133,28 @@ def test_without_the_script_the_calendar_is_read_only_and_says_how_to_fix_it(mon
     c.write_url = ""
     out, _ = reg.dispatch("calendar_create_event", {"title": "X", "date": "2026-11-21"})
     assert "not set up" in out and sent == []
+
+
+def test_sheet_records_are_keyed_by_column_and_skip_empty_cells(monkeypatch):
+    from ea.connectors import sheet_reader as sr
+    monkeypatch.setenv("READ_SHEETS", "blocks=https://script.example/a/exec, other=https://script.example/b/exec")
+    monkeypatch.setenv("READ_SHEETS_TOKEN", "tok")
+    config.load.cache_clear()
+    sent = []
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"title": "Blocks", "tab": "Form Responses 1", "total_rows": 300, "first_row": 299,
+                    "headers": ["Timestamp", "Quality", ""], "rows": [["9/1/2024 22:46:32", "4", ""], ["9/4/2024 14:53:21", "", "x"]]}
+    monkeypatch.setattr(sr.httpx, "post", lambda url, json=None, **kw: sent.append((url, json)) or R())
+    reader = sr.SheetReader(config.load())
+    out = reader.rows("other", last=2)
+    assert sent == [("https://script.example/b/exec", {"token": "tok", "action": "rows", "last": 2, "offset": 0})]
+    assert out["records"] == [{"Timestamp": "9/1/2024 22:46:32", "Quality": "4"}, {"Timestamp": "9/4/2024 14:53:21", "column 3": "x"}]
+    assert out["total_rows"] == 300
+    with pytest.raises(sr.SourceError, match="blocks, other"):
+        reader.rows("nope")
+    monkeypatch.delenv("READ_SHEETS")
+    with pytest.raises(sr.SourceError):
+        sr.SheetReader(config.load()).rows("blocks")
