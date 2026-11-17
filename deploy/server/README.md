@@ -23,9 +23,19 @@ Mac is shut. Everything is driven from the Mac with one script, `deploy/server/a
 - **The model** runs on the Claude subscription, as on the Mac. The server has no browser to sign in with, so it
   uses a long-lived token made once on the Mac with `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`). The API key
   remains the fallback when the subscription window is nearly used up.
-- **What stays on the Mac** is reached through the bridge (`bridge/mac_bridge.py`, launchd agent
-  `com.elityre.ea-bridge`): the Project Tracker, the Focus Monitor (and Toggl through it), and Sleep Bandit. When
-  the Mac is asleep those tools answer "Eli's Mac is not reachable"; everything else keeps working.
+- **The Project Tracker stays on the Mac** (Eli's decision, 2026-11-17) and is reached through the bridge
+  (`bridge/mac_bridge.py`, launchd agent `com.elityre.ea-bridge`) whenever the Mac is awake, for reads and
+  writes. For when it is asleep the server keeps a **read-only copy** (container `tracker`, from the tracker
+  project's `deploy/tailnet`): `sync-tracker-copy.sh` (cron, every five minutes) asks the bridge for
+  `/tracker-copy` and swaps the snapshot in when it changed. With the Mac away, tracker reads come from the copy
+  with a note saying when it was synced, and changes go to `/opt/atlas/data/tracker_outbox.jsonl`, which the
+  scheduler replays on the Mac once it answers again (`ea/connectors/project_tracker.py`). A replayed change the
+  tracker refuses is reported in the next tracker tool result.
+- **Sleep Bandit runs on the server** (container `bandit`, from its project's `deploy/tailnet`), with Oura syncing
+  by itself; the agent reaches it at `http://bandit:8777` (`sources.direct`), Eli at `http://atlas:8777`.
+- **The Focus Monitor stays on the Mac** (it watches the Mac) and is read through the bridge.
+- **Time zone.** The tracker copy and Sleep Bandit work in local time. `follow-mac-timezone.sh` (cron, every ten
+  minutes) reads the Mac's zone from the bridge's `/health` and recreates a container whose zone differs.
 - **Document folders** (`[[document_roots]]`) are copied from the Mac to `/opt/atlas/data/docs/<name>` through
   the bridge every two minutes (`ea/docs_mirror.py`), with their exact modified times, so the "document edited"
   notices behave as before.
@@ -53,6 +63,7 @@ Mac is shut. Everything is driven from the Mac with one script, `deploy/server/a
 | File | Purpose |
 |---|---|
 | `atlas-server.sh` | `provision`, `deploy`, `env`, `check`, `cutover`, `back-to-mac`, `status`, `logs`, `ssh` |
+| `sync-tracker-copy.sh`, `follow-mac-timezone.sh` | Run by cron on the server (installed by `provision`): refresh the tracker's read-only copy; keep the moved tools in the Mac's time zone |
 | `config.server.example.toml` | Template for `config.server.toml`: the bridge address, where the document copies are |
 | `../Dockerfile`, `../docker-compose.yml` | The image and how it is run |
 | `../../bridge/` | The Mac side: `mac_bridge.py`, its launchd plist, `install_bridge.sh` |
@@ -105,6 +116,11 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
 ```
 
 ## Gotchas learned
+
+- **Simulating a sleeping Mac** without closing the laptop: inside the container, point `sources.bridge_url` at a
+  Tailscale address nobody answers on and call the connector (done 2026-11-17; a real overnight sleep has not
+  been observed yet). Never let such a test write to the real `tracker_outbox.jsonl`.
+- **Logs of the two cron jobs**: `/var/log/sync-tracker-copy.log`, `/var/log/follow-mac-timezone.log` on the server.
 
 - **The Claude CLI will not run tools unprompted as root**, so the container runs as user 1000 and
   `/opt/atlas/data` belongs to that user. A root-owned file in there (copied by hand) makes the agent fail to write.

@@ -377,10 +377,16 @@ reverses it. The Mac app points at the server; the iPhone app (updated the same 
   it is Eli's decision.
 - `back-to-mac` has not been run.
 
-**Still on the Mac afterwards:** the Project Tracker, Focus Monitor and Sleep Bandit. With the Mac shut the agent
-answers, keeps its schedule, reads Otter/Roam/calendar/sheets and pushes to the phone, but cannot read or change
-tasks, focus data or sleep data until the Mac wakes. Moving the tracker's server to the same machine is the next
-step if that matters in practice.
+**Nothing the agent reads depends on the laptop being awake (2026-11-17, Eli: "everything works the same but
+doesn't depend on my laptop being awake"; then: "I want my project tracker to run locally").**
+- Toggl: read from Toggl directly on the server.
+- Sleep Bandit and Oura: Sleep Bandit moved to the server (`http://atlas:8777`); daily backups come back to the Mac.
+- Focus Monitor: stays on the Mac; the server keeps a copy of its answers (ten-minute refresh).
+- Project Tracker: stays on the Mac and the agent uses it there when the Mac is awake. Asleep: reads from a
+  read-only copy on the server (five-minute sync), changes queued and made on wake.
+- Not yet seen with the Mac really asleep overnight (only simulated). After the first night, check
+  `/var/log/sync-tracker-copy.log` on the server and ask Atlas about a task from the phone with the laptop shut.
+- A good URL for Sleep Bandit: Eli asked; options given, his choice pending.
 
 ## Decisions to make rather than default
 
