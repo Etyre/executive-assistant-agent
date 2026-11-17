@@ -7,8 +7,10 @@ from ..workspace import Workspace
 from .registry import ToolRegistry
 
 
-def register(reg: ToolRegistry, ws: Workspace, show: "callable | None" = None, docs: "Documents | None" = None) -> None:
-    """`show(doc)` (set by the server) asks every open app to bring that document up in the workspace pane."""
+def register(reg: ToolRegistry, ws: Workspace, show: "callable | None" = None, docs: "Documents | None" = None,
+             hide: "callable | None" = None) -> None:
+    """`show(doc)` (set by the server) asks every open app to bring that document up in the workspace pane;
+    `hide()` asks them to close the pane."""
     def _show(name: str = "workspace") -> None:
         if show is not None:
             show(name)
@@ -77,6 +79,15 @@ def register(reg: ToolRegistry, ws: Workspace, show: "callable | None" = None, d
     def workspace_open() -> Any:
         _show()
         return "workspace shown in the app"
+
+    @reg.tool("workspace_close", "Close the workspace pane in the user's app, leaving just the chat. Nothing on the page "
+              "is changed or lost, and workspace_open (or any edit) brings it back. Use when the user asks you to "
+              "close it, or when you are both done with what was on it.", writes=False)
+    def workspace_close() -> Any:
+        if hide is None:
+            return {"error": "no app is connected to close it in"}
+        hide()
+        return "workspace pane closed in the app"
 
     # ---------------------------------------------------------------- documents beyond the whiteboard
     if docs is not None:

@@ -98,6 +98,18 @@ def test_remove_tool_prunes_cleanly():
     assert ws.history()[0]["note"] == "removed" and ws.history()[1]["note"] == "done"
 
 
+def test_agent_can_open_and_close_the_pane():
+    from ea.tools.registry import ToolRegistry
+    from ea.tools import workspace_tools
+    ws = _ws(); ws.write("# Workspace\n\nkeep me\n", by="user")
+    reg, events = ToolRegistry(), []
+    workspace_tools.register(reg, ws, show=lambda name='workspace': events.append("show"), hide=lambda: events.append("hide"))
+    assert not reg.dispatch("workspace_close", {})[1] and not reg.dispatch("workspace_open", {})[1]
+    assert events == ["hide", "show"] and "keep me" in ws.read()["text"]          # closing changes nothing on the page
+    reg2 = ToolRegistry(); workspace_tools.register(reg2, ws)
+    assert "no app" in str(reg2.dispatch("workspace_close", {})[0])
+
+
 def test_documents_store_and_endpoints(monkeypatch):
     import json, tempfile
     from ea.workspace import Documents

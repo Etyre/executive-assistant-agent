@@ -216,7 +216,9 @@ finishes; a Chromium that died is relaunched on the next call.
   notifications (APNs; needs a paid Apple developer account and `APNS_*` in `.env`), the chat streams replies,
   and every open copy stays in sync through `GET /api/events`. Setup in `apps/Atlas/README.md`. Beside the chat
   is the shared workspace (a whiteboard plus named documents) edited in Literal's editor with Mermaid diagrams,
-  and a thinking pane.
+  and a thinking pane. The agent can open the workspace pane (`workspace_open`, `document_open`) and close it
+  (`workspace_close`); both travel as a `ui` event to every open app. Design rule (Eli, 2026-11-17): whatever the
+  agent can do in the app it can also undo, so a tool that opens, shows, adds or pins comes with its opposite.
 - **Telegram** (optional, legacy): make a bot with @BotFather, put the token in `.env`, your numeric user id
   in `channels.telegram_allowed_user_ids` (ask @userinfobot). Text and voice notes (transcribed with
   OpenAI or Deepgram if a key is set, or local faster-whisper). Anyone not on the list is ignored.

@@ -511,6 +511,9 @@ final class ChatStore {
             if (e["action"] as? String) == "show_workspace" {
                 if !showWorkspace { showWorkspace = true }
                 if let d = e["doc"] as? String, d != currentDoc { switchDocument(d) } else { Task { await loadWorkspace() } }
+            } else if (e["action"] as? String) == "hide_workspace" {
+                // The agent closed the pane. Unsaved typing is safe: the debounced save lives in this store, not the pane.
+                if showWorkspace { showWorkspace = false }
             }
         case "workspace":
             if (e["client_id"] as? String) == config.clientID { return }      // our own save
