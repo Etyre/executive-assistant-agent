@@ -41,6 +41,7 @@ class Scheduler:
         self.rng = rng or random.Random()
         self._now_fn = now_fn
         self._relay_at = 0.0                   # last time the inbox relay ran (server deployment only)
+        self._focus_at = 0.0                   # last time the Focus Monitor's answers were copied from the Mac (same)
         self._mirror_at = 0.0                  # last time the document folders were copied from the Mac (same)
 
     def now(self) -> dt.datetime:
@@ -257,6 +258,14 @@ class Scheduler:
                 inbox_relay.forward(self.s)             # inbox records made while the Mac was asleep
             except Exception:  # noqa: BLE001
                 log.exception("inbox relay failed")
+        if self.s.sources.bridge_url and time.time() - self._focus_at > 600:
+            self._focus_at = time.time()
+            try:
+                from ..connectors.focus_monitor import FocusMonitor
+                from ..connectors.http import ServiceRouter
+                FocusMonitor(ServiceRouter(self.s)).refresh()     # so focus data can be read while the Mac sleeps
+            except Exception:  # noqa: BLE001
+                log.exception("focus monitor copy failed")
         roam = getattr(self.agent, "roam", None)
         if roam is not None and self.s.sources.roam_backup_git:
             try:

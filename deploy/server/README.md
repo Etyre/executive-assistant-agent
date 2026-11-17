@@ -29,6 +29,11 @@ Mac is shut. Everything is driven from the Mac with one script, `deploy/server/a
 - **Document folders** (`[[document_roots]]`) are copied from the Mac to `/opt/atlas/data/docs/<name>` through
   the bridge every two minutes (`ea/docs_mirror.py`), with their exact modified times, so the "document edited"
   notices behave as before.
+- **Focus Monitor answers are kept.** Every ten minutes the server copies the Focus Monitor's metrics (120 days)
+  and day detail (today, yesterday, and the fortnight before when missing) into `/opt/atlas/data/focus_cache.json`
+  (`ea/connectors/focus_monitor.py`). With the Mac asleep the focus tools answer from that copy, with a note saying
+  when it was taken; the monitor records nothing while the Mac sleeps, so the copy is complete.
+- **Toggl** is read straight from Toggl's API on the server (`toggl_source = "toggl"` in `config.server.toml`).
 - **The LLM inbox.** A message from the model to Eli is recorded on the server and Eli is notified from there
   (ntfy / email, the same settings as on the Mac). The record is then copied into the Mac's inbox through the
   bridge (`ea/inbox_relay.py`), at once if the Mac is awake and otherwise when it wakes, so `llm-inbox` and the

@@ -201,3 +201,44 @@ def test_close_tracker_stops_launcher_then_python(bridge, tmp_path, monkeypatch)
     assert c.post("/mac/close-tracker", headers=H).json()["ok"] and killed == [70, 78]
     ps = "  1 /sbin/launchd\n"
     assert c.post("/mac/close-tracker", headers=H).status_code == 404
+
+
+def test_focus_monitor_answers_from_its_kept_copy_when_the_mac_is_away(tmp_path, monkeypatch):
+    import httpx
+    from ea import config
+    from ea.connectors import focus_monitor as fm
+    from ea.connectors.http import ServiceRouter, SourceError
+    config.load.cache_clear()
+    s = config.load(); s.sources.bridge_url = "http://mac:8799"
+    state = {"up": True}
+
+    def handler(req):
+        if not state["up"]:
+            raise httpx.ConnectError("no route to host")
+        if req.url.path.endswith("/api/metrics"):
+            return httpx.Response(200, json={"days": [{"day": "2026-11-16", "total_focus_min": 200}, {"day": "2026-11-17", "total_focus_min": 90}]})
+        day = dict(req.url.params).get("day") or "2026-11-17"
+        return httpx.Response(200, json={"day": day, "metrics": {"total_focus_min": 90}, "focus_spans": [{"start": "09:00", "duration": 1800}], "to_review": 2})
+
+    router = ServiceRouter(s)
+    monkeypatch.setattr(router, "client", lambda service: httpx.Client(base_url=f"http://mac:8799/{service}", transport=httpx.MockTransport(handler),
+                                                                       headers={"X-Bridge-Token": "t"}))
+    f = fm.FocusMonitor(router, cache_path=tmp_path / "focus_cache.json")
+    assert f.refresh() >= 3                                            # today, yesterday and the metrics
+    live_day, live_metrics = f.day(), f.metrics(2)
+    state["up"] = False                                                # the Mac goes to sleep
+    kept = f.day()
+    assert "copy taken at" in kept.pop("note") and kept == live_day
+    assert f.day("2026-11-16")["day"] == "2026-11-16"
+    m = f.metrics(1)
+    assert "copy taken at" in m["note"] and m["days"] == live_metrics[-1:]
+    try:
+        f.day("2026-10-01"); assert False
+    except SourceError as e:
+        assert "no copy" in str(e)
+    assert f.refresh() == 0                                            # and a refresh while away keeps what it has
+    assert f.day()["day"] == "2026-11-17"
+    # on the Mac (no bridge) nothing is kept and errors pass straight through
+    s.sources.bridge_url = ""
+    assert fm.FocusMonitor(ServiceRouter(s)).cache_path is None
+    config.load.cache_clear()
