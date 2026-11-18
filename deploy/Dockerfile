@@ -7,10 +7,11 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     EA_DATA=/data EA_CONFIG=/app/config.toml EA_CONFIG_OVERLAY=/app/config.server.toml EA_SHARED_DIR=/app/shared \
     HOME=/data/home PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-# git + ssh: the Roam backup is a git checkout that is pulled every few hours. libatomic1: the Node that Playwright
+# git + ssh + git-lfs: the Roam backup is a git checkout that is pulled every few hours, and its one big file is
+# stored with LFS (without git-lfs a pull leaves a 134-byte pointer in place of the data, 2026-11-17). libatomic1: the Node that Playwright
 # bundles will not start without it, and the slim image does not have it (build failed 2026-11-17).
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client ca-certificates tzdata curl libatomic1 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs openssh-client ca-certificates tzdata curl libatomic1 \
+    && git lfs install --system && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && python -m playwright install --with-deps chromium \
