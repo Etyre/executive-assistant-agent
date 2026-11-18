@@ -149,3 +149,32 @@ def test_one_thread_again_with_the_setting_off_and_nothing_is_lost(monkeypatch):
     a.handle("back on the chat thread", channel="app")           # 4: the chat session again, caught up on 3
     assert (calls[3]["resume"], calls[3]["fork"]) == ("chat-session", False)
     assert "on the one thread" in calls[3]["text"] and "noted 3" in calls[3]["text"]
+
+
+def test_a_keepalive_that_was_not_served_fast_is_not_repeated_in_the_same_window():
+    # On the server (2026-11-17/18) fast mode was off; the ping never moved sdk_fast_last_call and ran every 30 s.
+    import hashlib
+    from ea.agent import prompt
+    a = _agent()
+    system, now = prompt.stable_block(a.settings), time.time()
+    a.convo.set("sdk_session:main:fast", "chat-session")
+    a.convo.set("sdk_system_sig:main:fast", hashlib.sha1(system.encode()).hexdigest())
+    a.convo.set("sdk_fast_last_chat", now - 3600)
+    a.convo.set("sdk_fast_last_call", now - 56 * 60)
+    assert a.sdk.keepalive_due(system, now) == "chat-session"
+    a.convo.set("sdk_fast_ping_missed", now)                     # what _ping records when the speed was not fast
+    assert a.sdk.keepalive_due(system, now + 30) is None
+    a.convo.set("sdk_fast_last_call", now + 60)                  # a real fast call later: the next window is open again
+    assert a.sdk.keepalive_due(system, now + 60 + 56 * 60) == "chat-session"
+
+
+def test_the_cli_is_told_about_fast_mode_only_under_a_setup_token(tmp_path, monkeypatch):
+    from ea.llm.agent_sdk import know_fast_mode
+    f = tmp_path / ".claude.json"
+    f.write_text(json.dumps({"userID": "x"}))
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    assert know_fast_mode(tmp_path) is False and "penguin" not in f.read_text()      # the Mac's own login: left alone
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    assert know_fast_mode(tmp_path) is True
+    assert json.loads(f.read_text()) == {"userID": "x", "penguinModeOrgEnabled": True}
+    assert know_fast_mode(tmp_path) is False                                          # already there: no rewrite

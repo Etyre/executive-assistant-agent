@@ -110,6 +110,13 @@ decision is one line in `Agent._handle` (`ea/agent/core.py`); `llm.fast_when_cha
 - **API engine / fallback**: `speed="fast"` on each model call of the turn (`AnthropicProvider.complete(fast=True)`);
   a background turn switches to fast from the moment a message from you is folded into it. A 429 from fast
   mode's own rate limit is redone once at standard speed.
+- **On the server the CLI must be told the account has fast mode.** Signed in with a `claude setup-token` token it
+  never caches `penguinModeOrgEnabled` in `~/.claude.json`, reports fast mode `'off' (preference)`, and serves
+  standard speed: every chat turn from the move (2026-11-17) until the next day. `know_fast_mode()` in
+  `ea/llm/agent_sdk.py` writes the value before a fast turn when that token is in use. The sign in the log is
+  `fast mode requested but the CLI reports 'off'`; `SELECT speed, mode FROM llm_usage` in `state.db` shows it too.
+- **A keep-alive that is not served fast is tried once per window**, not every 30 seconds until the cache expires
+  (`sdk_fast_ping_missed`); each try reads the whole conversation.
 - **Cost on the subscription**: fast mode is not part of the plan; it is paid from the account's *extra usage*
   credits (claude.ai → Settings → Usage), up to the *monthly spend limit* on the same page. With no credits
   left, or the month's limit reached, the CLI still says "on" but serves standard speed and the log says `fast mode not served this turn: Fast mode disabled · usage credit limit reached`.

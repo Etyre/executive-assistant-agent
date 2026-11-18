@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import pathlib
 import re
 import threading
@@ -89,6 +90,33 @@ class ContactedEli(LLMError):
     def __init__(self, record: dict[str, Any]):
         super().__init__(f"the model contacted Eli (inbox {record['id']})")
         self.record = record
+
+
+def know_fast_mode(home: pathlib.Path | None = None) -> bool:
+    """Tell the CLI that this account has fast mode, when it cannot find out by itself. Returns True if it wrote.
+
+    The CLI only honours `fastMode` when `penguinModeOrgEnabled` is true in ~/.claude.json, a value it caches from
+    the account after an interactive login. Signed in with a `claude setup-token` token (the server), it never
+    learns it, reports fast mode 'off' (preference), and every chat turn ran at standard speed from the move on
+    2026-11-17 until this was found the next day. With the value present the same token is served fast (tested on
+    the server). Only done for that kind of login; the Mac's own login keeps the value current itself."""
+    import json
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return False
+    f = (home or pathlib.Path.home()) / ".claude.json"
+    try:
+        d = json.loads(f.read_text()) if f.exists() else {}
+        if d.get("penguinModeOrgEnabled") is True:
+            return False
+        d["penguinModeOrgEnabled"] = True
+        tmp = f.with_name(f.name + ".ea-tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(f)
+        log.warning("told the CLI this account has fast mode (penguinModeOrgEnabled in %s)", f)
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("could not set the CLI's fast mode flag")
+        return False
 
 
 class AgentSDKRunner:
@@ -260,6 +288,8 @@ class AgentSDKRunner:
         import json
         from claude_agent_sdk import ClaudeAgentOptions
         llm = self.s.llm
+        if fast:
+            know_fast_mode()
         return ClaudeAgentOptions(
             system_prompt=system_text,
             tools=[],                                               # none of Claude Code's own tools: ours only
@@ -491,6 +521,11 @@ class AgentSDKRunner:
         age = now - float(self.convo.get("sdk_fast_last_call") or 0)
         if not sid or not (llm.fast_keepalive_minutes * 60 <= age < CACHE_SECONDS - 20):
             return None
+        # One attempt per window. A ping that was not served fast does not move sdk_fast_last_call, and without
+        # this it was repeated every 30 s until the cache expired: 8 full reads of the conversation each time
+        # (seen on the server 2026-11-17/18, when fast mode was off there).
+        if float(self.convo.get("sdk_fast_ping_missed") or 0) >= float(self.convo.get("sdk_fast_last_call") or 0):
+            return None
         if now - float(self.convo.get("sdk_fast_last_chat") or 0) > llm.fast_keepalive_max_idle_hours * 3600:
             return None
         if self.convo.get(f"sdk_system_sig:{lane}") != hashlib.sha1(system_text.encode()).hexdigest():
@@ -558,6 +593,8 @@ class AgentSDKRunner:
                         blocks.append({"type": "tool_use", "id": b.id, "name": b.name[len(PREFIX):] if b.name.startswith(PREFIX) else b.name, "input": b.input or {}})
         if totals["speed"] == "fast" and totals["cache_read"]:
             self.convo.set("sdk_fast_last_call", started)       # read at fast speed: the cache lasts another hour
+        else:
+            self.convo.set("sdk_fast_ping_missed", started)     # keepalive_due: do not try again in this window
         if blocks:                                              # every model response is checked for a message to Eli
             contact.check(model=self.provider.model, system=system_text, messages=[{"role": "user", "content": KEEPALIVE_PROMPT}],
                           content=blocks, tools=self.tools.specs(), stop_reason="end_turn",
