@@ -144,6 +144,10 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
   (`allow_tailnet` in nightblock's config; verified during a block: the Atlas app's address, Sleep Bandit on
   :8777 and ssh all answer, and the server's calls into the bridge always did). Before that the Mac could not
   reach the server at night and the Atlas app said "waiting for a connection". Docker Hub is still refused.
+- **`ssh atlas-server` goes over Tailscale** since 2026-11-18 (`HostName atlas.<tailnet>.ts.net` with
+  `HostKeyAlias <public address>` in `~/.ssh/config`), because the night block refuses the public address and
+  every `atlas-server.sh` command failed with "Connection refused" after midnight. With Tailscale down, use
+  `ssh -o HostName=<public address> atlas-server`.
 - **Playwright's bundled Node needs `libatomic1`**, which `python:3.12-slim` lacks; without it the image build
   stops with exit code 127 and no useful message unless built with `--progress=plain`.
 - **A space after the `=` in `data/server.env`** stays in the value; the token line must have none.
