@@ -140,9 +140,10 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
   that header. The first bridge (2026-11-04) also dropped `X-Agent-Name`, so writes lost their attribution.
 - **The App Store Tailscale's command line does not answer under launchd**; the bridge reads the Mac's address
   from `ifconfig` instead.
-- **The Mac's night block (00:00 to 06:00) refuses connections to Tailscale addresses from the Mac**, and Docker
-  Hub. Whether it also refuses the server's calls into the bridge has not been tested; if the Mac tools fail at
-  night while the Mac is awake, that is where to look.
+- **The Mac's night block (00:00 to 06:00) lets the whole Tailscale network through** since 2026-11-18
+  (`allow_tailnet` in nightblock's config; verified during a block: the Atlas app's address, Sleep Bandit on
+  :8777 and ssh all answer, and the server's calls into the bridge always did). Before that the Mac could not
+  reach the server at night and the Atlas app said "waiting for a connection". Docker Hub is still refused.
 - **Playwright's bundled Node needs `libatomic1`**, which `python:3.12-slim` lacks; without it the image build
   stops with exit code 127 and no useful message unless built with `--progress=plain`.
 - **A space after the `=` in `data/server.env`** stays in the value; the token line must have none.
