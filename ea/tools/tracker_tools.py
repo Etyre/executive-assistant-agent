@@ -173,6 +173,45 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
     def tracker_complete_task(task_id: int, undo: bool = False) -> Any:
         return tracker.complete_task(task_id, undo)
 
+    @reg.tool("tracker_move_task", "Move a task, with everything under it. Give `parent_id` to put it under another task "
+              "(it joins that task's project), `project_id` to move it to the top level of another project, or "
+              "`top_level: true` to take it out from under its parent within its own project. `after_id` places it right "
+              "after that sibling; without it the task goes to the end.",
+              {"properties": {"task_id": {"type": "integer"}, "parent_id": {"type": "integer"}, "project_id": {"type": "integer"},
+                              "after_id": {"type": "integer"}, "top_level": {"type": "boolean"}},
+               "required": ["task_id"]}, writes=True)
+    @guard
+    def tracker_move_task(task_id: int, parent_id: int | None = None, project_id: int | None = None,
+                          after_id: int | None = None, top_level: bool = False) -> Any:
+        if parent_id is None and project_id is None and after_id is None and not top_level:
+            return {"error": "say where: parent_id, project_id, top_level or after_id"}
+        return tracker.move_task(task_id, project_id, parent_id, after_id, top_level)
+
+    @reg.tool("tracker_archive_task", "Remove a task from the outline and the schedule, with everything under it, finished or "
+              "not. This is how a task is deleted: it is archived, nothing is lost, and `restore: true` with the same "
+              "task_id brings it back with the sub-items archived with it. Use it for a task that should not exist "
+              "(a duplicate, a mistake); a task that was done is completed, not archived.",
+              {"properties": {"task_id": {"type": "integer"}, "restore": {"type": "boolean"}}, "required": ["task_id"]}, writes=True)
+    @guard
+    def tracker_archive_task(task_id: int, restore: bool = False) -> Any:
+        return tracker.archive_task(task_id, restore)
+
+    @reg.tool("tracker_archive_project", "Remove a project from the outline, with its sub-projects; its open tasks stay open "
+              "but leave the schedule. Nothing is lost: `restore: true` with the same project_id brings it all back. "
+              "For a project that never held anything, tracker_delete_empty_project removes it for good instead.",
+              {"properties": {"project_id": {"type": "integer"}, "restore": {"type": "boolean"}}, "required": ["project_id"]}, writes=True)
+    @guard
+    def tracker_archive_project(project_id: int, restore: bool = False) -> Any:
+        return tracker.archive_project(project_id, restore)
+
+    @reg.tool("tracker_delete_empty_project", "Delete a project for good. The tracker only allows it for a project that has "
+              "never had a task and has no sub-projects (the undo of creating one by mistake; tracker_create_project "
+              "makes it again). Anything else: tracker_archive_project.",
+              {"properties": {"project_id": {"type": "integer"}}, "required": ["project_id"]}, writes=True)
+    @guard
+    def tracker_delete_empty_project(project_id: int) -> Any:
+        return tracker.delete_empty_project(project_id)
+
     @reg.tool("tracker_schedule_context", "Everything needed to plan a day: the current plan with block statuses and whether "
               "it is pinned, free windows between meetings, prioritised candidate tasks with calibrated estimates and your "
               "notes, routines, today's exercise, the user's scheduling rules document and any standing instructions for the day. "

@@ -73,10 +73,13 @@ def test_every_write_the_tracker_connector_makes_is_allowed_through_the_bridge(b
     src = (ROOT / "ea/connectors/project_tracker.py").read_text()
     calls = re.findall(r'self\._send\("([A-Z]+)", f?"([^"]+)"', src)
     assert len(calls) >= 14
+    assert any("archive" in p for _, p in calls) and ("DELETE", "/api/projects/{pid}") in calls
     for method, path in calls:
-        path = re.sub(r"\{'uncomplete' if undo else 'complete'\}", "complete", path)
-        path = re.sub(r"\{\w+\}", "7", path)
-        assert bridge._allowed(method, "tracker", path), f"{method} {path} would be refused by the bridge"
+        either = re.search(r"\{'(\w+)' if \w+ else '(\w+)'\}", path)             # .../{'restore' if restore else 'archive'}
+        for path in ([path[:either.start()] + w + path[either.end():] for w in either.groups()] if either else [path]):
+            path = re.sub(r"\{\w+\}", "7", path)
+            assert bridge._allowed(method, "tracker", path), f"{method} {path} would be refused by the bridge"
+    assert not bridge._allowed("DELETE", "tracker", "/api/tasks/7")              # hard delete of a task stays closed
 
 
 def test_open_tracker_and_inbox(bridge, tmp_path, monkeypatch):
@@ -305,6 +308,46 @@ def test_tracker_with_the_mac_asleep_reads_the_copy_and_queues_changes(tmp_path,
     live = json.loads(reg.dispatch("tracker_find_tasks", {"q": "x"})[0])
     assert "was refused when it was applied" in live["note"] and "no such task" in live["note"] and "live" in json.dumps(live["result"])
     assert "note" not in json.loads(reg.dispatch("tracker_find_tasks", {"q": "x"})[0])               # told once
+
+    # tracker_notes: the connector's list of pending notes once had the method's name and broke it (2026-11-18)
+    out, err = reg.dispatch("tracker_notes", {"task_id": 1})
+    assert not err and "not callable" not in out
+
+    # A change queued while a replay is under way is kept. Replay used to write back the list it had read before
+    # trying the Mac, and of two tasks created together while the Mac slept only one arrived (2026-11-18).
+    state["awake"], state["refuse"], state["mac_calls"] = False, None, []
+    reg.dispatch("tracker_create_task", {"title": "the video"})
+    real_send, late = pt.send_json, []
+
+    def slow_send(c, method, path, body=None, **params):
+        if method == "POST" and not late:                             # the Mac wakes; mid-replay the second task is queued
+            late.append(1)
+            state["awake"] = False
+            reg.dispatch("tracker_create_task", {"title": "the script"})
+            state["awake"] = True
+        return real_send(c, method, path, body, **params)
+    state["awake"] = True
+    monkeypatch.setattr(pt, "send_json", slow_send)
+    assert tr.replay() == {"done": 1, "failed": 0, "waiting": 1}
+    assert [r["body"]["title"] for r in tr._outbox()] == ["the script"]
+    assert tr.replay()["waiting"] == 0 and [c[2]["title"] for c in state["mac_calls"]] == ["the video", "the script"]
+
+    # moving, archiving and restoring go to the tracker's own routes
+    monkeypatch.setattr(pt, "send_json", real_send)
+    state["mac_calls"] = []
+    reg.dispatch("tracker_move_task", {"task_id": 4, "parent_id": 2})
+    reg.dispatch("tracker_move_task", {"task_id": 4, "top_level": True})
+    reg.dispatch("tracker_archive_task", {"task_id": 4})
+    reg.dispatch("tracker_archive_task", {"task_id": 4, "restore": True})
+    reg.dispatch("tracker_archive_project", {"project_id": 26})
+    reg.dispatch("tracker_archive_project", {"project_id": 26, "restore": True})
+    reg.dispatch("tracker_delete_empty_project", {"project_id": 27})
+    assert state["mac_calls"] == [
+        ("PATCH", "/tracker/api/tasks/4", {"parent_id": 2}), ("PATCH", "/tracker/api/tasks/4", {"parent_id": None}),
+        ("POST", "/tracker/api/tasks/4/archive", None), ("POST", "/tracker/api/tasks/4/restore", None),
+        ("DELETE", "/tracker/api/projects/26", None), ("POST", "/tracker/api/projects/26/restore", None),
+        ("POST", "/tracker/api/projects/27/delete_empty", None)]
+    assert "say where" in reg.dispatch("tracker_move_task", {"task_id": 4})[0]
     config.load.cache_clear()
 
 

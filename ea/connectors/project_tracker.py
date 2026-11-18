@@ -15,6 +15,7 @@ import os
 import pathlib
 import signal
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -38,6 +39,10 @@ def app_pids(app: pathlib.Path) -> list[int]:
     return [pid for _, pid in sorted(found)]
 
 
+# One lock for every read-modify-write of the outbox file, across every ProjectTracker in the process (the tools
+# and the scheduler each have one).
+_OUTBOX = threading.Lock()
+
 BESIDE = ("The Project Tracker's server runs on the server beside you, not as an app on Eli's Mac, so there is nothing "
           "for you to open or close. If it is not answering, tell Eli: `deploy/tailnet/server.sh status` in the tracker's project.")
 
@@ -51,7 +56,7 @@ class ProjectTracker:
         self.copy_url = s.sources.tracker_copy_url.rstrip("/") if router.bridge else ""
         self.outbox_path = s.data_dir / "tracker_outbox.jsonl"
         self.failed_path = s.data_dir / "tracker_outbox_failed.jsonl"
-        self.notes: list[str] = []
+        self._notes: list[str] = []       # not `notes`: that name is the method below, and shadowing it broke tracker_notes (2026-11-18)
         tok = config.secret(s.sources.tracker_agent_token_env)
         if tok:
             self.headers["Authorization"] = f"Bearer {tok}"
@@ -80,8 +85,8 @@ class ProjectTracker:
             at = (get_json(c, "/api/replica") or {}).get("synced_at")
         when = dt.datetime.fromtimestamp(at).strftime("%Y-%m-%d %H:%M") if at else "an unknown time"
         waiting = len(self._outbox())
-        self.notes = [n for n in self.notes if not n.startswith("Eli's Mac is asleep")]     # one such note per result
-        self.notes.append(f"Eli's Mac is asleep, so this is the server's copy of the tracker as of {when} (server time)."
+        self._notes = [n for n in self._notes if not n.startswith("Eli's Mac is asleep")]     # one such note per result
+        self._notes.append(f"Eli's Mac is asleep, so this is the server's copy of the tracker as of {when} (server time)."
                           + (f" {waiting} change(s) you made since are waiting for the Mac and are not in it." if waiting else ""))
         return out
 
@@ -92,9 +97,11 @@ class ProjectTracker:
         except SourceError as e:
             if not self._away(e):
                 raise
-        rec = {"at": time.time(), "method": method, "path": path, "body": body, "params": {k: v for k, v in params.items() if v is not None}}
-        with open(self.outbox_path, "a") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        rec = {"at": time.time(), "id": os.urandom(6).hex(), "method": method, "path": path, "body": body,
+               "params": {k: v for k, v in params.items() if v is not None}}
+        with _OUTBOX:
+            with open(self.outbox_path, "a") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return {"queued": True, "note": "Eli's Mac is asleep, so the tracker could not be changed just now. The change is saved "
                 "and will be made when the Mac wakes; nothing more is needed from you. Until then the tracker's copy will "
                 "not show it, and a new task or project has no ID yet."}
@@ -105,13 +112,27 @@ class ProjectTracker:
         except OSError:
             return []
 
+    def _settled(self, rec: dict[str, Any]) -> int:
+        """Take one change out of the outbox file; returns how many are left. The file is read again under the
+        lock, never written back from a list read earlier: replay used to do that, and a change queued while a
+        replay was waiting on the sleeping Mac was wiped out (one of two tasks created together, 2026-11-18)."""
+        with _OUTBOX:
+            left = self._outbox()
+            for i, r in enumerate(left):
+                if r == rec:
+                    del left[i]
+                    break
+            tmp = self.outbox_path.with_suffix(".tmp")
+            tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in left))
+            tmp.replace(self.outbox_path)
+            return len(left)
+
     def replay(self) -> dict[str, int]:
         """Make the waiting changes on the Mac, oldest first. Stops at the first one that finds the Mac away again;
-        one the tracker refuses is dropped and remembered (failed_path) so the next tracker tool result says so."""
+        one the tracker refuses is dropped and remembered (failed_path) so the next tracker tool result says so.
+        While the Mac is away the file is not touched at all."""
         waiting, done, failed = self._outbox(), 0, 0
-        if not waiting:
-            return {"done": 0, "failed": 0, "waiting": 0}
-        left = list(waiting)
+        left = len(waiting)
         for rec in waiting:
             try:
                 with self._c() as c:
@@ -123,15 +144,12 @@ class ProjectTracker:
                 failed += 1
                 with open(self.failed_path, "a") as f:
                     f.write(json.dumps({**rec, "error": str(e)[:300]}, ensure_ascii=False) + "\n")
-            left.remove(rec)
-        tmp = self.outbox_path.with_suffix(".tmp")
-        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in left))
-        tmp.replace(self.outbox_path)
-        return {"done": done, "failed": failed, "waiting": len(left)}
+            left = self._settled(rec)
+        return {"done": done, "failed": failed, "waiting": left}
 
     def take_notes(self) -> list[str]:
         """What a tool result should carry besides its data: "this is the copy", and changes that failed on replay."""
-        notes, self.notes = self.notes, []
+        notes, self._notes = self._notes, []
         try:
             failed = [json.loads(ln) for ln in self.failed_path.read_text().splitlines() if ln.strip()]
             self.failed_path.unlink()
@@ -327,6 +345,32 @@ class ProjectTracker:
 
     def complete_task(self, tid: int, undo: bool = False) -> dict[str, Any]:
         return self._send("POST", f"/api/tasks/{tid}/{'uncomplete' if undo else 'complete'}")
+
+    def move_task(self, tid: int, project_id: int | None = None, parent_id: int | None = None, after_id: int | None = None,
+                  top_level: bool = False) -> dict[str, Any]:
+        """Under another task (parent_id; the project follows the parent), into a project (project_id; top level
+        there), or out to the top level of its own project (top_level). after_id: right after that sibling."""
+        body: dict[str, Any] = {}
+        if project_id is not None:
+            body["project_id"] = project_id
+        if parent_id is not None or top_level:
+            body["parent_id"] = None if top_level else parent_id      # the tracker applies an explicit null
+        if after_id is not None:
+            body["after_id"] = after_id
+        return self._send("PATCH", f"/api/tasks/{tid}", body)
+
+    def archive_task(self, tid: int, restore: bool = False) -> dict[str, Any]:
+        """Put a task and everything under it away, finished or not (the tracker's "delete": nothing is lost)."""
+        return self._send("POST", f"/api/tasks/{tid}/{'restore' if restore else 'archive'}")
+
+    def archive_project(self, pid: int, restore: bool = False) -> dict[str, Any]:
+        if restore:
+            return self._send("POST", f"/api/projects/{pid}/restore")
+        return self._send("DELETE", f"/api/projects/{pid}")           # the tracker's DELETE archives, with sub-projects
+
+    def delete_empty_project(self, pid: int) -> dict[str, Any]:
+        """For good; the tracker refuses unless the project never had a task and has no sub-projects."""
+        return self._send("POST", f"/api/projects/{pid}/delete_empty")
 
 
 MARKERS = {"Paused at workshops": "paused_at_workshops", "Covered when overwelmed": "covered_when_overwhelmed", "dimmed": "dimmed"}

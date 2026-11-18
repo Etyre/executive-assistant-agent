@@ -62,7 +62,9 @@ WRITE_ALLOW = [
     ("PUT", re.compile(r"^/api/agent/schedule(/instructions)?$")),
     ("DELETE", re.compile(r"^/api/agent/schedule/instructions$")),
     ("POST", re.compile(r"^/api/agent/schedule/(rebuild|unpin)$")),
-    ("POST", re.compile(r"^/api/tasks/\d+/(complete|uncomplete)$")),
+    ("POST", re.compile(r"^/api/tasks/\d+/(complete|uncomplete|archive|restore)$")),
+    ("DELETE", re.compile(r"^/api/projects/\d+$")),                      # the tracker's DELETE archives; restore undoes it
+    ("POST", re.compile(r"^/api/projects/\d+/(restore|delete_empty)$")),   # delete_empty: refused unless the project never held anything
     ("PATCH", re.compile(r"^/api/tasks/\d+$")),
 ]
 # Reads that have side effects upstream; blocked.
