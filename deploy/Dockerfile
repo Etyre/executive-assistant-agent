@@ -18,7 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY ea ./ea
 COPY instructions ./instructions
 COPY shared ./shared
-# Not root: the Claude CLI refuses to run tools without permission prompts as root.
+# Not root: the Claude CLI refuses to run tools without permission prompts as root. The user needs a passwd entry:
+# ssh stops with "No user exists for uid 1000" without one, and every Roam backup pull failed (seen 2026-11-17).
+RUN useradd --uid 1000 --home-dir /data/home --no-create-home --shell /bin/sh atlas
 USER 1000:1000
 EXPOSE 8800
 HEALTHCHECK --interval=60s --timeout=10s --start-period=60s CMD curl -fsS http://127.0.0.1:8800/health || exit 1

@@ -124,6 +124,11 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
 
 - **The Claude CLI will not run tools unprompted as root**, so the container runs as user 1000 and
   `/opt/atlas/data` belongs to that user. A root-owned file in there (copied by hand) makes the agent fail to write.
+- **ssh needs a passwd entry for the user it runs as.** With only `USER 1000:1000` in the image, every Roam backup
+  pull failed with "No user exists for uid 1000" (2026-11-17, found in `docker logs atlas`); the image now creates
+  the user. Testing the deploy key from the server's own shell does not catch this.
+- **The phone says "waiting for a connection"** when its URL (Settings in the app) still names the Mac, or when
+  Tailscale is off on the phone. `tailscale status` on the server shows whether the phone has ever talked to it.
 - **Docker publishes ports past ufw.** The compose file binds the port to 127.0.0.1 for that reason; do not
   change it to 0.0.0.0.
 - **HOME is on the data volume** (`/data/home`). The CLI's sessions, the LLM inbox and the Roam key live under
