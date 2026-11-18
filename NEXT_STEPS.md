@@ -369,7 +369,11 @@ backups; ssh host `atlas-server` in `~/.ssh/config`), reached at `http://atlas.t
 Tailscale. AWS Lightsail was tried first and refused (the account's vCPU quota was 0). `provision`, `deploy`,
 `env`, `check` and `cutover --yes` all ran as written; the subscription token answered from the server; the
 saved sessions were copied; push is configured there. The Mac's launchd job is disabled; `back-to-mac --yes`
-reverses it. The Mac app points at the server; the iPhone app (updated the same day) needs the URL set by hand.
+reverses it. The Mac app points at the server; the iPhone app points at it too (set 2026-11-17 over the cable with
+`devicectl ... launch --payload-url 'atlas://setup?url=...'`; it connected and sent a queued message). Eli chose to
+keep Tailscale as the phone's way in (no public address for now); his two steps for "always works": turn on VPN On
+Demand in the phone's Tailscale app, and disable key expiry for `atlas` and the phone in the Tailscale admin
+console (keys otherwise expire May 2027).
 
 **Open after the move:**
 - The night block (00:00-06:00) refuses Tailscale addresses from the Mac, so the Mac app cannot reach the agent
