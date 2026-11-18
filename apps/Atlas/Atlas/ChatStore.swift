@@ -261,16 +261,28 @@ final class ChatStore {
 
     // MARK: sending
 
+    /// iOS: the text just sent, while the field is being kept clear of it (see send).
+    @ObservationIgnored private var clearingSent: String?
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = attachments
         guard !text.isEmpty || !images.isEmpty else { return }
         draft = ""                                   // cleared on submit; given back below if the send fails
         #if os(iOS)
-        // The vertical-axis TextField writes its old text back into the binding right after onSubmit, so the
-        // sent message stayed in the field (Eli, 2026-11-12). Clear it once more after that write-back.
-        DispatchQueue.main.async { [weak self] in
-            if let self, self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { self.draft = "" }
+        // The vertical-axis TextField writes its old text back into the binding after onSubmit, so the sent message
+        // stayed in the field (Eli, 2026-11-12). One clear on the next run loop was not enough (Atlas, 2026-11-18):
+        // the write-back can come later, and when the keyboard autocorrects the last word on send it is not the
+        // same string as the one sent. So for a third of a second anything in the field that is the sent text, or
+        // too long to have been typed since, is cleared. A failed send that gives the text back ends this first.
+        clearingSent = text
+        for delay in [0.0, 0.12, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.clearingSent == text else { return }
+                let now = self.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !now.isEmpty, now.caseInsensitiveCompare(text) == .orderedSame || now.count >= max(4, text.count / 2) { self.draft = "" }
+                if delay > 0.3 { self.clearingSent = nil }
+            }
         }
         #endif
         attachments = []
@@ -286,7 +298,7 @@ final class ChatStore {
                     let r = try await api.sendNow(text, images: images, messageID: meID)
                     activity = r.queued ? "the agent will see your message in its current turn" : activity
                 } catch {
-                    if Self.isOffline(error) { markQueued(meID) } else { lastError = error.localizedDescription; if draft.isEmpty { draft = text } }
+                    if Self.isOffline(error) { markQueued(meID) } else { lastError = error.localizedDescription; clearingSent = nil; if draft.isEmpty { draft = text } }
                 }
             }
             return

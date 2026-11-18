@@ -167,14 +167,20 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
 
     def _store_images(m: "MessageIn") -> list[dict[str, Any]]:
         store = getattr(agent, "images", None)
-        if not m.images or store is None:
+        if store is None:
             return []
         if len(m.images) > 6:
             raise HTTPException(400, "at most 6 images per message")
         try:
-            return [store.save(i.data, i.media_type) for i in m.images]
+            out = [store.save(i.data, i.media_type) for i in m.images]
         except ValueError as e:
             raise HTTPException(400, str(e))
+        # A screenshot given as a path on the Mac is fetched and attached; one that cannot be is said so in the text.
+        if hasattr(store, "from_paths") and len(out) < 6:
+            found, note = store.from_paths(m.text, getattr(agent, "router", None), limit=6 - len(out))
+            out += found
+            m.text += note
+        return out
 
     # Messages already taken in, by the app's message id. The phone resends a message when the request was cut
     # before any reply text arrived (it left the app, lost signal): it cannot know the server had it, and the
@@ -266,7 +272,7 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         dup = _accept(m)
         if dup is not None:
             return {"reply": await asyncio.to_thread(_reply_of, dup), "duplicate": True}
-        images = _store_images(m)
+        images = await asyncio.to_thread(_store_images, m)     # may fetch a screenshot from the Mac: off the event loop
         stored = _submit(m, images)
         if stored is not None:                                        # a turn is running: it will see this
             await asyncio.to_thread(_wait_stored, stored)
@@ -506,7 +512,7 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
                 reply = await asyncio.to_thread(_reply_of, dup)
                 yield (json.dumps({"type": "done", "reply": reply}, ensure_ascii=False) + "\n").encode()
             return StreamingResponse(again(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-        images = _store_images(m)
+        images = await asyncio.to_thread(_store_images, m)     # may fetch a screenshot from the Mac: off the event loop
         stored = _submit(m, images)
         if stored is not None:
             async def handed_over() -> AsyncIterator[bytes]:

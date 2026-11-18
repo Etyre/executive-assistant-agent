@@ -226,7 +226,7 @@ finishes; a Chromium that died is relaunched on the next call.
   and a thinking pane. The agent can open the workspace pane (`workspace_open`, `document_open`) and close it
   (`workspace_close`); both travel as a `ui` event to every open app. Design rule (Eli, 2026-11-17): whatever the
   agent can do in the app it can also undo, so a tool that opens, shows, adds or pins comes with its opposite. The
-  pairs: `workspace_open`/`workspace_close`, `thinking_pane` (show true/false), `tracker_open`/`tracker_close`
+  pairs: `workspace_open`/`workspace_close`, `thinking_pane` (show true/false), `tracker_open`/`tracker_close`, `tracker_archive_task` and `tracker_archive_project` (each with `restore: true`; the tracker's "delete" is an archive)
   (quits the tracker app: its API, menu bar item and so the agent's tracker and calendar tools, until reopened),
   `memory_archive`/`memory_restore` (with `memory_archived` to list what can come back).
 - **Telegram** (optional, legacy): make a bot with @BotFather, put the token in `.env`, your numeric user id
@@ -409,6 +409,20 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **A screenshot can be sent as a path on the Mac** (2026-11-18): a message containing `/Users/.../x.png` (or
+  `~/Desktop/...`; png, jpeg, gif, webp) has that file fetched and attached like an image from the app
+  (`ImageStore.from_paths`, `GET /mac/image` on the bridge). Only Downloads and Desktop are served. A copied
+  screenshot path has a plain space where the file name has U+202F before AM/PM; `read_mac_image` matches it anyway.
+  When the file cannot be fetched (Mac asleep, another folder) the message says so to the model in a bracketed line.
+- **Never give a connector an attribute with a method's name.** `self.notes = []` on `ProjectTracker` hid
+  `notes()` and `tracker_notes` failed with "'list' object is not callable" (2026-11-18).
+- **The tracker outbox is only changed under its lock, from a fresh read.** `replay()` once wrote back the list it
+  read before trying the Mac (which takes as long as the connect timeout when the Mac is asleep) and wiped a change
+  queued in between: of two tasks created together, one arrived (2026-11-18).
+- **iPhone message field**: SwiftUI's vertical `TextField` writes the sent text back into the binding after
+  `onSubmit`, sometimes a moment later and with the last word autocorrected, so it is not equal to what was sent.
+  `ChatStore.send` keeps the field clear for a third of a second (`clearingSent`).
 
 - **A document with a space in its name would not open in the app (HTTP 400 "document names are...").** The app
   percent-encoded the name and then built the URL with `appendingPathComponent`, which encodes again: the server

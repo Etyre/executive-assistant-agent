@@ -8,6 +8,7 @@ only, and wants the token in an `X-Bridge-Token` header. It does these things an
   /bandit/...        -> Sleep Bandit     127.0.0.1:8777   (GET only)
   POST /mac/open-tracker   starts the Project Tracker app when its API is down
   POST /mac/close-tracker  quits it (launcher and Python)
+  GET  /mac/image?path=    an image file in Downloads or Desktop (a screenshot whose path Eli wrote in a message)
   POST /inbox              appends an LLM-inbox record written on the server to this Mac's inbox, so `llm-inbox`
                            and the page on :8798 show it (the promise in the shared preamble is kept from here)
   GET  /tracker-copy       a snapshot of the tracker's database, config and documents, for the read-only copy on the server
@@ -263,6 +264,22 @@ def document_file(name: str, path: str, request: Request) -> Response:
     if not p.is_relative_to(folder.resolve()) or p not in [f.resolve() for f in _md_files(folder)]:
         raise HTTPException(404, "no such document")           # only what /documents lists; nothing outside the folder
     return Response(p.read_bytes(), media_type="text/markdown")
+
+
+@app.get("/mac/image")
+def mac_image(path: str, request: Request) -> Response:
+    """An image file in this Mac's Downloads or Desktop, by the path Eli wrote in a chat message (a screenshot's
+    path). The rule for what may be read is ea/images.py `read_mac_image`; nothing else on the disk is served."""
+    _auth(request)
+    sys.path.insert(0, str(REPO)) if str(REPO) not in sys.path else None
+    from ea.images import read_mac_image
+    try:
+        raw, media = read_mac_image(path)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except PermissionError:
+        raise HTTPException(403, "macOS did not let the bridge read that folder (System Settings, Privacy & Security, Files and Folders)")
+    return Response(raw, media_type=media)
 
 
 @app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
