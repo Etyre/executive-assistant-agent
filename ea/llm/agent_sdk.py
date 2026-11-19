@@ -309,7 +309,10 @@ class AgentSDKRunner:
             resume=resume,
             fork_session=bool(resume and fork),                     # a copy under a new id; the original is untouched
             # Bill the Claude subscription (the CLI's own login), not the API key the server holds for the fallback.
-            env={"ANTHROPIC_API_KEY": ""} if self.s.llm.billing == "subscription" else {},
+            # MAX_MCP_OUTPUT_TOKENS: the CLI refuses a tool result over 25,000 tokens by default, which number-heavy
+            # JSON reaches at about 60,000 characters, the registry's own cap (sleep_summary was refused, 2026-11-19).
+            # Raised so the registry's cap is the one that applies and a long result arrives truncated, not as an error.
+            env={"MAX_MCP_OUTPUT_TOKENS": "40000", **({"ANTHROPIC_API_KEY": ""} if self.s.llm.billing == "subscription" else {})},
         )
 
     async def _turn(self, user_text: str, system_text: str, on_event: Callable[[dict[str, Any]], None] | None,

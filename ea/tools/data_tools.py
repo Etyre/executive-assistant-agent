@@ -68,7 +68,8 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
         return focus.day(day)
 
     @reg.tool("sleep_summary", "Sleep Bandit: the last N nights with HRV, lowest resting HR, total sleep hours, latency, "
-              "efficiency, tags, and which interventions were on (dose, done, taken_dose when it differed) or off; "
+              "efficiency, tags, and its interventions: `on` (name -> assigned dose), `done` (names), `off`, and "
+              "`taken` where the dose taken differed (over a long range older nights carry numbers and tags only); "
               "tonight's plan is the night marked is_tonight; HRV readiness status ('intervals' = recovered enough for "
               "hard training, 'recover' = not); and a verdict per intervention (chance it helps and effect size on "
               "HRV and on each other outcome, recommended dose). Name an `intervention` to get its full per-dose "

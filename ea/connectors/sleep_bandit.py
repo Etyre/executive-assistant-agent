@@ -3,12 +3,17 @@ intervention plan, per-intervention verdicts; and a read-only passthrough to any
 uses Sleep Bandit's own OAuth token (the single owner of the rotating refresh token)."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .http import ServiceRouter, get_json
 
 OURA_COLLECTIONS = ("sleep", "daily_sleep", "daily_readiness", "daily_activity", "daily_stress", "daily_spo2",
                     "heartrate", "workout", "session", "daily_resilience", "vo2_max")
+
+# The whole answer stays under this. The CLI refuses a tool result over 25,000 tokens, and number-heavy JSON runs
+# at about 2.4 characters a token (60,061 characters were refused, 2026-11-19).
+SUMMARY_CHARS = 36_000
 
 
 class SleepBandit:
@@ -21,7 +26,6 @@ class SleepBandit:
         the model (2026-11-19). The tables come back only for the one intervention named."""
         with self.router.client("bandit") as c:
             d = get_json(c, "/api/agent/summary", days=max(1, min(days, 400)))
-        d["nights"] = [_night(n) for n in d.get("nights", [])]
         items = d.get("interventions", [])
         if intervention:
             want = intervention.strip().lower()
@@ -33,6 +37,10 @@ class SleepBandit:
             d["interventions"] = [_rounded(i) for i in found]
         else:
             d["interventions"] = [_verdict(i) for i in items]
+        d["nights"], note = _fit([_night(n) for n in d.get("nights", [])],
+                                 max(4_000, SUMMARY_CHARS - len(json.dumps(d["interventions"]))))
+        if note:
+            d["note"] = note
         return d
 
     def oura(self, collection: str, days: int = 7) -> dict[str, Any]:
@@ -61,21 +69,48 @@ def _rounded(v: Any) -> Any:
 
 
 def _night(n: dict[str, Any]) -> dict[str, Any]:
-    """A night with its interventions as two short lists: the ones that were on (dose, done, what was actually
-    taken when that differs) and the names of the ones that were off. An off one that was done anyway stays whole."""
-    on, off = [], []
-    for c in n.get("cells") or []:
-        if not c.get("on") and not c.get("done") and c.get("taken_dose") is None and not c.get("excluded"):
-            off.append(c.get("intervention"))
+    """A night with its interventions as short lists instead of one record each: `on` (name -> assigned dose),
+    `done` (names, whether or not they were on), `off` (names), and only where they apply `taken` (name -> dose,
+    when it differed from the assigned one), `excluded` and `input`. Units are in the verdict list."""
+    cells = n.get("cells") or []
+    lists: dict[str, Any] = {
+        "on": {c.get("intervention"): c.get("assigned_dose") for c in cells if c.get("on")},
+        "done": [c.get("intervention") for c in cells if c.get("done")],
+        "off": [c.get("intervention") for c in cells if not c.get("on")],
+        "taken": {c.get("intervention"): c["taken_dose"] for c in cells
+                  if c.get("taken_dose") is not None and c.get("taken_dose") != c.get("assigned_dose")},
+        "excluded": [c.get("intervention") for c in cells if c.get("excluded")],
+        "input": {c.get("intervention"): c["input_value"] for c in cells if c.get("input_value") not in ("", None)},
+    }
+    out = {k: v for k, v in n.items() if k != "cells" and v not in ("", None, [])}
+    return _rounded({**out, **{k: v for k, v in lists.items() if v or k in ("on", "done")}})
+
+
+NIGHT_METRICS = ("date", "is_tonight", "status", "hrv", "lowest_resting_hr", "total_sleep_hours", "latency_min", "efficiency", "tags")
+
+
+def _fit(nights: list[dict[str, Any]], room: int) -> tuple[list[dict[str, Any]], str | None]:
+    """Keep the nights within `room` characters: the newest in full, older ones as their numbers and tags only, and
+    past that the oldest left out. Returns the nights in their original order and a note saying what was cut."""
+    order = sorted(range(len(nights)), key=lambda i: str(nights[i].get("date", "")), reverse=True)
+    kept: dict[int, dict[str, Any]] = {}
+    used, short_from, dropped = 0, None, 0
+    for i in order:
+        full = nights[i]
+        if short_from is None and used + len(json.dumps(full)) > room * 2 // 3:
+            short_from = full.get("date")
+        night = full if short_from is None else {k: full[k] for k in NIGHT_METRICS if k in full}
+        size = len(json.dumps(night)) + 2
+        if used + size > room:
+            dropped += 1
             continue
-        cell = {"intervention": c.get("intervention"), "dose": c.get("assigned_dose"), "unit": c.get("unit"),
-                "on": c.get("on"), "done": c.get("done")}
-        if c.get("taken_dose") is not None and c.get("taken_dose") != c.get("assigned_dose"):
-            cell["taken_dose"] = c["taken_dose"]
-        cell.update({k: c[k] for k in ("excluded", "input_value") if c.get(k)})
-        on.append({k: v for k, v in cell.items() if v not in ("", None)})
-    out = {k: v for k, v in n.items() if k != "cells"}
-    return _rounded({**out, "on": on, "off": off})
+        kept[i] = night
+        used += size
+    note = None
+    if short_from is not None:
+        note = f"To fit, nights from {short_from} back carry only their numbers and tags (ask for fewer days to see their interventions)"
+        note += f", and the {dropped} oldest are left out." if dropped else "."
+    return [kept[i] for i in sorted(kept)], note
 
 
 def _verdict(i: dict[str, Any]) -> dict[str, Any]:

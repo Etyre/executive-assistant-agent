@@ -395,7 +395,9 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   `data/.env` is the fallback when the window is used up.
 - **A tool result over about 25,000 tokens never reaches the model**: the CLI saves it to a file and returns an
   error instead. `sleep_summary` did this from 2026-11-19 (Sleep Bandit's answer is 100,000 characters whatever
-  `days` is, nearly all per-dose tables), so the connector trims it. Check the size of a new tool's answer on real data.
+  `days` is, nearly all per-dose tables), so the connector trims it to 36,000 characters. The registry cuts any
+  result at 60,000 characters, which number-heavy JSON turns into more than 25,000 tokens, so the CLI is also
+  started with `MAX_MCP_OUTPUT_TOKENS=40000` (not yet seen working on a real oversized result).
 - The tracker's agent API (`/api/agent`) and Sleep Bandit's agent routes are additions in those repos
   (`project-tracker-and-organizer` has it in `tracker/agent_api.py`, see its README "Agent API"; `sleep-bandit`
   gained `GET /api/agent/summary`, `GET /api/oura/collection` and `oura.fetch_collection`). A running copy

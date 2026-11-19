@@ -132,7 +132,7 @@ def test_subscription_fallback_to_api(monkeypatch):
     text, o = sdk_prompts[1]
     assert o.resume == "s1" and "RECENT CONVERSATION" not in o.system_prompt
     assert "# WHAT HAPPENED OUTSIDE THIS THREAD" in text and "\ntwo" in text and "api reply" in text and text.endswith("# THE MESSAGE\nthree")
-    assert sdk_prompts[1][1].env == {"ANTHROPIC_API_KEY": ""}            # the subprocess never sees the API key
+    assert sdk_prompts[1][1].env == {"MAX_MCP_OUTPUT_TOKENS": "40000", "ANTHROPIC_API_KEY": ""}            # the subprocess never sees the API key
 
 
 def test_rejected_limit_redoes_turn_over_api(monkeypatch):

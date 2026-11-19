@@ -45,7 +45,7 @@ def bandit(monkeypatch):
 def test_summary_is_small_and_keeps_the_verdicts(bandit):
     assert len(json.dumps(_full())) > 100_000
     out = bandit.summary(14)
-    assert len(json.dumps(out)) < 25_000
+    assert len(json.dumps(out)) < 25_000 and "note" not in out
     g = out["interventions"][0]
     assert g["name"] == "Glycine" and g["hrv"]["recommended_dose"] == 150.0 and g["hrv"]["p_helps"] == 0.555
     assert g["latency_min"] == {"p_helps": 0.555, "on_effect": 0.173}
@@ -55,11 +55,23 @@ def test_summary_is_small_and_keeps_the_verdicts(bandit):
 def test_night_keeps_what_was_on_and_what_was_taken(bandit):
     night = bandit.summary(14)["nights"][0]
     assert night["hrv"] == 48.4 and night["tags"] == ["short-night"] and "cells" not in night
-    by = {c["intervention"]: c for c in night["on"]}
-    assert by["Glycine"] == {"intervention": "Glycine", "dose": 1000.0, "unit": "mg", "on": True, "done": True}
-    assert by["Melatonin"]["taken_dose"] == 150.0          # differed from the assigned 300
-    assert by["Eyemask"]["on"] is False and by["Eyemask"]["done"] is True   # off but done anyway: not hidden
-    assert night["off"] == ["Apigenin"]
+    assert night["on"] == {"Glycine": 1000.0, "Melatonin": 300.0}
+    assert night["done"] == ["Glycine", "Melatonin", "Eyemask"]      # Eyemask was off but done anyway
+    assert night["off"] == ["Apigenin", "Eyemask"]
+    assert night["taken"] == {"Melatonin": 150.0}                    # differed from the assigned 300
+    assert "excluded" not in night and "input" not in night
+
+
+def test_a_long_range_still_fits_and_says_what_was_cut(bandit, monkeypatch):
+    full = _full()
+    full["nights"] = [{**full["nights"][0], "date": f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}"} for i in range(300)]
+    monkeypatch.setattr(sb, "get_json", lambda c, path, **kw: full)
+    out = bandit.summary(300)
+    assert len(json.dumps(out)) <= sb.SUMMARY_CHARS + 500
+    newest = max(out["nights"], key=lambda n: n["date"])
+    oldest = min(out["nights"], key=lambda n: n["date"])
+    assert "on" in newest and "on" not in oldest and oldest["hrv"] == 48.4
+    assert "only their numbers" in out["note"] and "oldest are left out" in out["note"]
 
 
 def test_one_intervention_by_name_has_its_dose_tables(bandit):
