@@ -68,11 +68,15 @@ def register(reg: ToolRegistry, router: ServiceRouter, toggl: Toggl, exercise: E
         return focus.day(day)
 
     @reg.tool("sleep_summary", "Sleep Bandit: the last N nights with HRV, lowest resting HR, total sleep hours, latency, "
-              "efficiency, which interventions were on/done, tags; tonight's intervention checklist; HRV readiness "
-              "status ('intervals' = recovered enough for hard training, 'recover' = not); per-intervention verdicts.",
-              {"properties": {"days": DAYS}, "required": ["days"]})
-    def sleep_summary(days: int) -> Any:
-        return bandit.summary(days)
+              "efficiency, tags, and which interventions were on (dose, done, taken_dose when it differed) or off; "
+              "tonight's plan is the night marked is_tonight; HRV readiness status ('intervals' = recovered enough for "
+              "hard training, 'recover' = not); and a verdict per intervention (chance it helps and effect size on "
+              "HRV and on each other outcome, recommended dose). Name an `intervention` to get its full per-dose "
+              "tables for every outcome instead of the short verdicts.",
+              {"properties": {"days": DAYS, "intervention": {"type": "string", "description": "An intervention's name, e.g. Glycine"}},
+               "required": ["days"]})
+    def sleep_summary(days: int, intervention: str | None = None) -> Any:
+        return bandit.summary(days, intervention)
 
     @reg.tool("oura_data", "Raw Oura v2 collection for the last N days, via Sleep Bandit's connection. Collections: "
               + ", ".join(OURA_COLLECTIONS) + ". daily_readiness has the readiness score and contributors; daily_activity "

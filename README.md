@@ -39,7 +39,7 @@ notification is what reaches Eli.
 | Toggl Track | read | by default the Focus Monitor's synced copy (`/api/toggl/current`, `/api/toggl/entries`; it polls Toggl every 5 min, so "current" can lag that much); `sources.toggl_source = "toggl"` calls Toggl API v9 directly with `TOGGL_API_TOKEN`. Switched 2026-11-11: the agent's own polling kept hitting Toggl's hourly quota, shared with the Focus Monitor |
 | Focus Monitor | read | `GET /api/metrics`, `/api/day` on :8790 (daily focus spans, distractions, totals) |
 | Oura ring | read | through Sleep Bandit's OAuth token: new `GET /api/oura/collection?name=daily_readiness&days=N` on :8777 (sleep, readiness, activity, stress, heartrate…) |
-| Sleep Bandit | read | new `GET /api/agent/summary?days=N` on :8777: nights, metrics, tonight's checklist, verdicts, HRV readiness status (no planning side effect) |
+| Sleep Bandit | read | new `GET /api/agent/summary?days=N` on :8777: nights, metrics, tonight's checklist, verdicts, HRV readiness status (no planning side effect); the connector cuts it down (`ea/connectors/sleep_bandit.py`) and returns per-dose tables only for one named intervention |
 | Exercise log | read | the exercise-tracker Apps Script `?action=export` (`EXERCISE_EXPORT_URL`) |
 | Otter.ai transcripts | read | new recordings through Otter's unofficial API (`OTTER_EMAIL`/`OTTER_PASSWORD`, no third party), plus the 2024+ archive the Roam extension wrote into the Logseq graph (`sources.otter_logseq_graph`); both merged into `data/otter.db` with FTS5 search (`otter_recent`, `otter_search`, `otter_transcript`); `python -m ea otter --all` for the first full pull |
 | Calendar | read + write | read: the same iCal feed(s) the tracker uses (`CALENDAR_ICS_URLS`), any date range up to 62 days; falls back to the tracker's single-day `GET /api/calendar`. Write (`calendar_create_event`, `calendar_update_event`, `calendar_delete_event`, `calendar_writable`): a Google Apps Script web app that runs as you (`deploy/calendar_script/`, address in `CALENDAR_WRITE_URL`, shared secret in `CALENDAR_WRITE_TOKEN`); read-only until both are set. The script is authorised for one thing only, Google's `calendar.events.owned` scope (see, create, change and delete events on calendars you own; no sharing, settings or subscribed calendars), never adds guests or sends notices, and refuses to change or delete an event that has other guests. That scope cannot list calendars, so the agent names a calendar to the script by the id in its feed address |
@@ -393,6 +393,9 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   `CALENDAR_WRITE_TOKEN` in `data/.env`, and its `/exec` URL in `CALENDAR_WRITE_URL`. Steps at the top of `Code.gs`.
 - The `claude` login on this Mac (the subscription the `agent_sdk` engine bills); `ANTHROPIC_API_KEY` in
   `data/.env` is the fallback when the window is used up.
+- **A tool result over about 25,000 tokens never reaches the model**: the CLI saves it to a file and returns an
+  error instead. `sleep_summary` did this from 2026-11-19 (Sleep Bandit's answer is 100,000 characters whatever
+  `days` is, nearly all per-dose tables), so the connector trims it. Check the size of a new tool's answer on real data.
 - The tracker's agent API (`/api/agent`) and Sleep Bandit's agent routes are additions in those repos
   (`project-tracker-and-organizer` has it in `tracker/agent_api.py`, see its README "Agent API"; `sleep-bandit`
   gained `GET /api/agent/summary`, `GET /api/oura/collection` and `oura.fetch_collection`). A running copy
