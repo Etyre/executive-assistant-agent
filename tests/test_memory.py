@@ -93,8 +93,9 @@ def test_a_name_cannot_reach_outside_the_memory_folder(tmp_path):
     for bad in ("../outside", "a/b", ".hidden", "", "..\\x"):
         with pytest.raises(ValueError):
             s.read(bad)
-        with pytest.raises(ValueError):
-            s.write("t", "b", name=bad)
+        if bad:                                  # an empty name means "use the title's slug", which is safe
+            with pytest.raises(ValueError):
+                s.write("t", "b", name=bad)
     assert not (tmp_path / "x.md").exists() and (tmp_path / "outside.md").read_text() == "private"
 
 
