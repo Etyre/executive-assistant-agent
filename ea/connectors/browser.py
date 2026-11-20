@@ -31,10 +31,12 @@ TEXT_JS = """() => {
     let out = ''; for (const c of n.childNodes) out += walk(c);
     const block = cs && /^(block|list-item|table|table-row|flex|grid)$/.test(cs.display);
     return block ? '\\n' + out + '\\n' : out; };
-  const links = [...document.querySelectorAll('a[href]')].filter(a => a.innerText.trim() && a.href.startsWith('http'))
-    .slice(0, 400).map(a => ({text: a.innerText.trim().replace(/\\s+/g, ' ').slice(0, 120), href: a.href}));
+  // An <a> inside an SVG has no innerText and its href is an object, not a string: both used to throw (2026-11-15).
+  const label = (a) => (a.innerText || a.textContent || '').trim();
+  const links = [...document.querySelectorAll('a[href]')].filter(a => typeof a.href === 'string' && a.href.startsWith('http') && label(a))
+    .slice(0, 400).map(a => ({text: label(a).replace(/\\s+/g, ' ').slice(0, 120), href: a.href}));
   const inputs = [...document.querySelectorAll('input, textarea, select')].filter(i => i.type !== 'hidden').slice(0, 40)
-    .map(i => ({tag: i.tagName.toLowerCase(), type: i.type || '', name: i.name || '', id: i.id || '', placeholder: i.placeholder || '', label: (i.labels && i.labels[0] ? i.labels[0].innerText : '').trim().slice(0, 60)}));
+    .map(i => ({tag: i.tagName.toLowerCase(), type: i.type || '', name: i.name || '', id: i.id || '', placeholder: i.placeholder || '', label: ((i.labels && i.labels[0] ? i.labels[0].innerText : '') || '').trim().slice(0, 60)}));
   return {title: document.title, text: walk(main), links, inputs, url: location.href};
 }"""
 
@@ -168,7 +170,21 @@ class Browser:
     # ------------------------------------------------------------------ reading (all run on the context's thread)
     def _read(self, c: _Ctx, offset: int = 0, max_chars: int | None = None) -> dict[str, Any]:
         page = self._ensure(c)
-        data = page.evaluate(TEXT_JS)
+        for attempt in range(4):
+            try:
+                data = page.evaluate(TEXT_JS)
+                break
+            except Exception as e:  # noqa: BLE001
+                # A page that redirects itself after loading (a login hop, a consent page) throws the script away
+                # mid-read: "Execution context was destroyed, most likely because of a navigation" (seen 5 times on
+                # 2026-11-19). Wait for where it is going and read that.
+                if attempt == 3 or not re.search(r"context was destroyed|navigation|Cannot find context", str(e)):
+                    raise
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=8000)
+                except Exception:  # noqa: BLE001 - still moving: the next read says so
+                    pass
+                page.wait_for_timeout(300)
         text = _condense(data.get("text") or "")
         c.last = {"url": data.get("url"), "title": data.get("title"), "text": text, "links": data.get("links") or [], "inputs": data.get("inputs") or []}
         return self._slice(c, offset, max_chars)

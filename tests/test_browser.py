@@ -13,6 +13,11 @@ HTML = """<html><head><title>Test Page</title></head><body>
 <nav><a href="/other.html">Other page</a> <a href="https://example.com/x">Example</a></nav>
 <main><h1>Hello</h1><p>First paragraph with   spaces.</p><script>document.querySelector('main').appendChild(Object.assign(document.createElement('p'),{textContent:'Made by JS'}))</script>
 <form><label for="q">Search box</label><input id="q" name="q" placeholder="type here"></form></main></body></html>"""
+SVG_LINK = """<html><head><title>Svg</title></head><body><main><p>Chart page</p>
+<svg width="20" height="20"><a href="https://example.com/in-svg"><text y="10">in svg</text></a></svg>
+<a href="https://example.com/plain">Plain link</a></main></body></html>"""
+HOP = """<html><head><title>Hop</title><script>setTimeout(() => location.replace('/other.html'), 750)</script></head>
+<body><p>Redirecting…</p></body></html>"""
 OTHER = "<html><head><title>Other</title></head><body><p>You followed the link.</p></body></html>"
 
 
@@ -20,6 +25,7 @@ OTHER = "<html><head><title>Other</title></head><body><p>You followed the link.<
 def site():
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "index.html").write_text(HTML); (d / "other.html").write_text(OTHER)
+    (d / "svg.html").write_text(SVG_LINK); (d / "hop.html").write_text(HOP)
     handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=str(d), **k)
     srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
     t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
@@ -147,3 +153,34 @@ def test_dead_chromium_is_relaunched():
         del sys.modules["playwright.sync_api"]
     assert launches == [1] and c.alive() and page is c.page
     c.stop()
+
+
+def test_a_link_inside_an_svg_does_not_break_reading(site):
+    try:
+        b = Browser(timeout_ms=10_000)
+        page = b.open(f"{site}/svg.html")
+    except Exception as e:  # noqa: BLE001
+        if "Cannot read properties" in str(e) or "is not a function" in str(e):
+            raise
+        pytest.skip(f"headless browser unavailable: {e}")
+    try:
+        assert "Chart page" in page["text"]
+        assert {"text": "Plain link", "href": "https://example.com/plain"} in page["links"]
+    finally:
+        b.close()
+
+
+def test_a_page_that_redirects_itself_while_being_read_is_read_where_it_lands(site, monkeypatch):
+    from ea.connectors import browser as mod
+    try:
+        b = Browser(timeout_ms=10_000)
+        b.open(f"{site}/index.html")
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"headless browser unavailable: {e}")
+    try:
+        # The page goes quiet, then redirects 750 ms after loading; the read is made slow enough to be caught by it.
+        monkeypatch.setattr(mod, "TEXT_JS", "async () => { await new Promise(r => setTimeout(r, 900)); return (" + mod.TEXT_JS + ")(); }")
+        page = b.open(f"{site}/hop.html")
+        assert page["title"] == "Other" and "You followed the link" in page["text"]
+    finally:
+        b.close()
