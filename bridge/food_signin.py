@@ -19,6 +19,12 @@ sys.path.insert(0, str(REPO))
 from ea import config  # noqa: E402
 
 
+# Signed in, as far as the page shows: not on the sign-in page, and no "Sign in" button in the header.
+SIGNED_IN_JS = """() => !location.pathname.startsWith('/login') && document.readyState === 'complete' &&
+  !!document.querySelector('header, nav') &&
+  ![...document.querySelectorAll('button, a')].some(e => /^(sign in|login|log in)$/i.test((e.innerText || '').trim()))"""
+
+
 def main() -> None:
     s = config.load()
     try:                                    # a running bridge has the profile open after a recent order
@@ -33,20 +39,35 @@ def main() -> None:
     from playwright.sync_api import sync_playwright
     profile = pathlib.Path(s.food.profile).expanduser()
     profile.mkdir(parents=True, exist_ok=True)
+    seen = False
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False, no_viewport=True)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(s.food.home)
-        print(f"Sign in to {s.food.site} in the window that opened, then close the window.")
-        try:
-            page.wait_for_event("close", timeout=0)
-        except Exception:  # noqa: BLE001 - the whole browser was quit
-            pass
+        print(f"Sign in to {s.food.site} in the window that opened, then close the window.", flush=True)
+        while True:                         # until the window is closed: say when the site shows a signed-in page
+            try:
+                page.wait_for_timeout(2000)
+                if not seen and page.evaluate(SIGNED_IN_JS):
+                    seen = True
+                    print("The window now shows a signed-in page. Close it when you are ready.", flush=True)
+            except Exception:  # noqa: BLE001 - the window (or the whole browser) was closed
+                break
         try:
             ctx.close()
         except Exception:  # noqa: BLE001
             pass
-    print("Saved. The agent's browser will use this sign-in from now on.")
+        # The check that matters: a fresh, hidden Chrome on the same profile, as the agent will use it.
+        ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=True)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(s.food.home.rstrip("/") + "/account/profile", wait_until="domcontentloaded")
+        page.wait_for_timeout(6000)
+        kept = "/login" not in page.url
+        ctx.close()
+    if not kept:
+        sys.exit("NOT signed in: " + ("the window showed a signed-in page, but the sign-in did not survive closing it "
+                 "(was 'Keep me signed in' ticked?)." if seen else "the window never showed a signed-in page."))
+    print("Signed in, and the sign-in was still there in a fresh hidden browser. The agent will use it from now on.")
 
 
 if __name__ == "__main__":

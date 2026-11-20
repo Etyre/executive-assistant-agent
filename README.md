@@ -210,7 +210,12 @@ finishes; a Chromium that died is relaunched on the next call.
 
 ### Food ordering
 
-Built 2026-11-19 (Eli: a meal ordered every day without him thinking about it). The agent orders on **Grubhub**
+**Switched off (`[food] enabled = false`): it cannot sign in.** Grubhub lets an automated browser look at menus
+but answers its sign-in with a "Press & Hold" robot check that fails even when Eli presses it himself, and Google
+refuses its sign-in outright (both 2026-11-19). Getting past either means disguising the browser, which this
+project does not do. The code below works against a site that allows it and is kept for that.
+
+Built 2026-11-19 (Eli: a meal ordered every day without him thinking about it). The agent was to order on **Grubhub**
 with Eli's own account. Uber Eats was the first choice and is not usable: it answers an automated browser with a
 bot check (403), which this project does not try to get past; no delivery service offers individuals an ordering API.
 
@@ -420,6 +425,10 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   `CALENDAR_WRITE_TOKEN` in `data/.env`, and its `/exec` URL in `CALENDAR_WRITE_URL`. Steps at the top of `Code.gs`.
 - The `claude` login on this Mac (the subscription the `agent_sdk` engine bills); `ANTHROPIC_API_KEY` in
   `data/.env` is the fallback when the window is used up.
+- **Grubhub blocks signing in from an automated browser** (2026-11-19): signed out, menus and the bag work, but
+  the sign-in form leads to `grubhub.com/captcha/verify` ("Access to this page has been blocked", Press & Hold,
+  "Please try again" for a real person too), and "Continue with Google" ends at Google's "This browser or app may
+  not be secure". So food ordering is off. Checking that a site lets the browser *sign in* comes before building.
 - **Uber Eats refuses automated browsers** (Cloudflare "Performing security verification", HTTP 403, from the Mac
   with the real Chrome, 2026-11-19); Grubhub does not. If Grubhub starts to, `food_view` returns `blocked` and the
   agent stops and says so. Do not add anything that disguises the browser.
