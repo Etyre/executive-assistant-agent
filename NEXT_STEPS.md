@@ -409,3 +409,11 @@ doesn't depend on my laptop being awake"; then: "I want my project tracker to ru
 - Whether the tracker's agent API should require a token.
 - Whether to add a license to the public repo (https://github.com/Etyre/executive-assistant-agent); none yet.
 - Whether to replace `user_name = "Eli"` and the `com.elityre.*` launchd labels with placeholders in the public repo.
+
+**Google Sheets (planned for the morning of 2026-11-20, after the night block):** the agent side is built and
+`READ_SHEETS_TOKEN` is set, but `READ_SHEETS` is empty, so `sheets_available` / `sheet_records` do not work yet.
+Agreed with Eli: Claude Code drives his Chrome to paste `deploy/sheet_reader_script/` into the two sheets
+("Intentionality and work block record" responses, "What did I make or produce") and create the web app
+deployments; Eli pastes the token into Script Properties (`SHEET_TOKEN`) and clicks Allow on Google's permission
+screen. Then: add the two `/exec` URLs to `READ_SHEETS` in `data/.env`, `atlas-server.sh env`, `deploy`, and read
+rows from both through Atlas's tools.
