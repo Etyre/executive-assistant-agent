@@ -180,6 +180,23 @@ Server side: `ea/channels/push.py` (APNs, device registry), `ea/channels/events.
 
 ## Gotchas learned
 
+- **A history reload must not drop a message of ours the server has not stored yet** (2026-11-20). `merge` used to
+  keep only server rows and rows marked pending or queued; a just-sent row is neither, so a reload during a slow
+  send removed it, and when the send then failed there was nothing left to queue. It now stays (for ten minutes)
+  until a stored copy with its text appears. The cache is written the moment a message is sent, and a relaunch
+  resends an own message from the last ten minutes that was never confirmed (the server answers a repeated message
+  id with the first reply).
+- **A send the server refuses puts the text back in the field** and leaves the error bubble on screen; the reload
+  that used to follow wiped both.
+- **The live feed treats only a copy among the last four rows as a duplicate.** Checking the whole thread swallowed
+  any message whose words had been said before (a recurring reminder), with no bubble and no notification.
+- **A setup link on a running app must call `restart()`**: `start()` returns at once when already started, so the
+  event stream stayed on the old server.
+- **Shift+Return in the Mac composer** is left to the editor (`.ignored`); appending "\n" to the draft put the line
+  break at the end of the text instead of at the cursor.
+- **A workspace save that finishes after more typing** leaves the document dirty and saves again; marking it clean
+  let the next remote change replace the newer text.
+
 - **The thread went blank after sending (Mac, 2026-11-12).** The composer and toolbar stayed, the message list
   showed nothing. The post-turn history reload replaced the whole array (two rows dropped at the top by the
   120-row limit, the last two re-identified with server ids) and the `LazyVStack` never laid anything out again.

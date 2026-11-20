@@ -178,7 +178,7 @@ struct ChatView: View {
                         }
                     }
                     .onKeyPress(.return, phases: .down) { press in
-                        if press.modifiers.contains(.shift) { store.draft += "\n"; return .handled }
+                        if press.modifiers.contains(.shift) { return .ignored }     // the editor adds the line break itself, at the cursor (appending put it at the end)
                         store.send(); return .handled
                     }
             }

@@ -163,9 +163,15 @@ final class ChatStore {
         wsSaving = true
         defer { wsSaving = false }
         do {
-            let d = try await api.saveWorkspace(wsText, baseVersion: overwrite ? "" : wsVersion, name: currentDoc)
+            let sent = wsText, doc = currentDoc
+            let d = try await api.saveWorkspace(sent, baseVersion: overwrite ? "" : wsVersion, name: doc)
+            guard doc == currentDoc else { return }
             wsVersion = d.version; wsUpdatedBy = d.updatedBy; wsUpdatedAt = d.updatedAt
-            wsDirty = false; wsConflict = nil; wsRemoteChange = nil; wsError = nil
+            wsConflict = nil; wsRemoteChange = nil; wsError = nil
+            // Typed again while this save was on its way: that text is not on the server yet. Marking it clean let
+            // the next remote change replace it silently.
+            wsDirty = wsText != sent
+            if wsDirty { Task { await saveWorkspace() } }
         } catch let c as API.WorkspaceConflict {
             wsConflict = c.current              // the user decides: take theirs, or overwrite
         } catch {
@@ -253,7 +259,15 @@ final class ChatStore {
     /// showed up twice next to their stored copies (Eli, 2026-11-12). Rows older than the load keeps (the cache
     /// beyond the server's limit) stay in front; queued and streaming rows stay at the end.
     private func merge(_ fresh: [Message]) -> [Message] {
-        let waiting = messages.filter { $0.pending || $0.queued }
+        // A message of ours the server has not stored yet (its request still in flight, or handed to a running
+        // turn) is not in `fresh`. Dropping it here lost it for good when that request then failed: there was no
+        // row left to mark as queued (found 2026-11-20). It stays until a stored copy with its text shows up.
+        let recentMine = fresh.suffix(12).filter { $0.who == .me }.map(\.text)
+        // Only for ten minutes: after that the server either has it under other words (the first message after an
+        // ended conversation is stored with a note in front) or took it back after a model error.
+        let unconfirmed = messages.filter { $0.id.hasPrefix("local-me-") && !$0.queued && !$0.pending && !recentMine.contains($0.text)
+                                            && Self.isRecent($0.ts) }
+        let waiting = unconfirmed + messages.filter { $0.pending || $0.queued }
         guard let first = fresh.first else { return waiting }
         let older = messages.filter { !$0.pending && !$0.queued && $0.id.hasPrefix("db-") && $0.ts < first.ts }
         return older + fresh + waiting
@@ -290,6 +304,7 @@ final class ChatStore {
         let now = Self.nowISO()
         let meID = "local-me-\(UUID().uuidString)"
         messages.append(Message(id: meID, who: .me, text: text, ts: now, channel: "app", localImages: images.map(\.data)))
+        saveCacheNow()
         if isSending {
             // The agent is mid-turn: hand the message over now; the running turn folds it in (or it starts the
             // next turn) and the reply arrives on the live feed (Eli, 2026-11-06).
@@ -318,6 +333,7 @@ final class ChatStore {
         Task {
             var got = ""
             var offline = false
+            var failed = false
             do {
                 for try await ev in api.send(text, images: images, messageID: meID) {
                     switch ev {
@@ -331,7 +347,7 @@ final class ChatStore {
                         } else {
                             update(replyID, text: final, pending: false)
                         }
-                    case .error(let e): update(replyID, text: (got.isEmpty ? "" : got + "\n\n") + "error: \(e)", pending: false)
+                    case .error(let e): failed = true; update(replyID, text: (got.isEmpty ? "" : got + "\n\n") + "error: \(e)", pending: false)
                     }
                 }
             } catch {
@@ -340,14 +356,23 @@ final class ChatStore {
                     messages.removeAll { $0.id == replyID }
                     markQueued(meID)
                 } else {
+                    failed = true
                     update(replyID, text: (got.isEmpty ? "" : got + "\n\n") + "error: \(error.localizedDescription)", pending: false)
                     lastError = error.localizedDescription
+                    if got.isEmpty {
+                        // The server refused it before storing it (a restart mid-deploy, too many images). The text
+                        // goes back into the field: "submitting and failing keeps the draft".
+                        messages.removeAll { $0.id == meID }
+                        if draft.isEmpty { draft = text }
+                    }
                 }
             }
             activity = ""
             isSending = false
             if offline {
                 lastError = "no connection to the server: your message is saved and will be sent when it is back"
+            } else if failed {
+                flushOutbox()                     // no reload: it would wipe the error bubble before it could be read
             } else {
                 await loadHistory()               // swap the local ids for the server's, so later events dedupe
                 flushOutbox()
@@ -391,6 +416,14 @@ final class ChatStore {
         return dir.appendingPathComponent("messages.json")
     }
 
+    /// Right now, not after the debounce: used when a message is sent, so leaving the app in the next second
+    /// cannot lose it.
+    private func saveCacheNow() {
+        cacheSave?.cancel()
+        let keep = Array(messages.filter { !$0.pending }.suffix(300))
+        if let data = try? JSONEncoder().encode(keep) { try? data.write(to: Self.cacheURL, options: .atomic) }
+    }
+
     private func cacheDirty() {
         cacheSave?.cancel()
         cacheSave = Task { [weak self] in
@@ -405,6 +438,9 @@ final class ChatStore {
         guard messages.isEmpty, let data = try? Data(contentsOf: Self.cacheURL),
               let cached = try? JSONDecoder().decode([Message].self, from: data) else { return }
         messages = cached
+        // Ours, and never confirmed by the server before the app was closed: send it (again). The server answers a
+        // repeat of a message id it already has with the first reply, so this cannot run a message twice.
+        for i in messages.indices where messages[i].id.hasPrefix("local-me-") && !messages[i].queued && Self.isRecent(messages[i].ts) { messages[i].queued = true }
         Diag.log("cache: \(cached.count) messages, \(cached.filter(\.queued).count) queued")
     }
 
@@ -502,7 +538,10 @@ final class ChatStore {
         case "message":
             guard let text = e["text"] as? String, let who = (e["who"] as? String).flatMap(Message.Who.init) else { return }
             if who == .me && (e["client_id"] as? String) == config.clientID { return }     // typed here; already on screen
-            if messages.contains(where: { $0.who == who && $0.text == text && !$0.pending }) { return }
+            // A copy already on screen (from a history load that raced this event) is a duplicate; the same words
+            // said earlier in the thread are not. Looking at the whole thread swallowed every repeat: a recurring
+            // reminder, a second "Done.", with no bubble and no notification (found 2026-11-20).
+            if messages.suffix(4).contains(where: { $0.who == who && $0.text == text && !$0.pending }) { return }
             if who == .it, let i = messages.lastIndex(where: { $0.who == .it && $0.pending }), messages[i].text == text {
                 messages[i].pending = false; return                    // the streamed bubble just finished with this text
             }
@@ -593,6 +632,13 @@ final class ChatStore {
     }
 
     // MARK: helpers
+
+    /// Whether a timestamp this app wrote (nowISO) is from the last ten minutes.
+    nonisolated static func isRecent(_ ts: String, seconds: TimeInterval = 600) -> Bool {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        guard let d = f.date(from: ts) else { return false }
+        return abs(Date().timeIntervalSince(d)) < seconds
+    }
 
     nonisolated static func nowISO() -> String {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"; return f.string(from: Date())

@@ -20,7 +20,7 @@ struct AtlasApp: App {
                 .task { await store.start() }
                 .onOpenURL { url in
                     NSApp.activate(ignoringOtherApps: true)
-                    if AppConfig.shared.apply(setup: url) { Task { await store.start() } }
+                    if AppConfig.shared.apply(setup: url) { Task { await store.restart() } }      // start() does nothing once started: the event stream stayed on the old server
                 }
         }
         .handlesExternalEvents(matching: ["open"])          // atlas://open creates the window if none is open
@@ -58,7 +58,7 @@ struct AtlasApp: App {
                 .environment(store)
                 .task { await store.start() }
                 .onOpenURL { url in
-                    if AppConfig.shared.apply(setup: url) { Task { await store.start() } }
+                    if AppConfig.shared.apply(setup: url) { Task { await store.restart() } }      // start() does nothing once started: the event stream stayed on the old server
                 }
         }
         #endif
