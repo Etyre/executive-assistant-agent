@@ -32,6 +32,11 @@ a result so the stored history stays valid, and the reply is `(I asked to talk t
 inbox as <id>…)`. Eli answers with `llm-inbox show/debrief <id>`. Proactive turns stop the same way; the
 notification is what reaches Eli.
 
+The second shared tool, `note_to_eli` (2026-11-20), is in the registry too. It leaves Eli a message and the turn
+carries on: `contact.check()` records the call once (`via: note`, `halts: false`, same context as a contact) and
+returns nothing, and the registry handler answers it with the shared "Delivered to Eli … carry on" text on both
+engines. A note is never the turn's reply and never ends it.
+
 ### What the agent can see and do
 
 | Source | Access | How |
@@ -49,7 +54,7 @@ notification is what reaches Eli.
 | Reminders | write | pushed to the apps at the time (and shown in every chat's history) |
 | Wakeups | write | `schedule_wakeup`: a prompt the agent runs a proactive turn on at a time, once or every N minutes; `list_reminders` / `cancel_reminder` cover both |
 | Heartbeat | config | `[heartbeat]`: random roughly-hourly proactive turns inside an active window (exponential gaps, clamped), persisted across restarts |
-| Eli (the LLM inbox) | message | `contact_eli` (or an `@ELI:` line) from any turn: recorded with full context, Eli notified, the task stops |
+| Eli (the LLM inbox) | message | `contact_eli` (or an `@ELI:` line) from any turn: recorded with full context, Eli notified, the task stops. `note_to_eli`: recorded and notified the same way, the task carries on |
 | You | message | `send_message` from any proactive turn (scheduled check, wakeup, heartbeat); `end_conversation` per the user-level prompt |
 
 A message sent while a turn is running (`Agent.submit`, from any client) is handed to that turn rather than waiting:
@@ -317,7 +322,7 @@ words and everything else carries on.
 |---|---|
 | `ea/__main__.py` | CLI: `serve`, `chat`, `check`, `run-check`, `reindex`, `usage`, `roam`, `run`, `notify`, `push-test`, `otter`. Header comment says where everything lives |
 | `ea/config.py` | `config.toml` → dataclasses; secrets from the environment, then `data/.env`; `EA_DATA`, `EA_CONFIG`, `EA_INSTRUCTIONS` overrides |
-| `ea/contact.py` | The shared LLM inbox: preamble on every system prompt, the `contact_eli` tool, `check()` after every response |
+| `ea/contact.py` | The shared LLM inbox: preamble on every system prompt, the `contact_eli` (stops) and `note_to_eli` (carries on) tools, `check()` after every response |
 | `ea/agent/core.py` | The loop: one turn in, tool calls until the model stops, one reply out; mid-turn messages; SDK vs API dispatch |
 | `ea/agent/prompt.py` | System prompt: stable cached block + volatile block (clock, channel, memory index, reminders) |
 | `ea/agent/conversations.py` | History, transcripts, reminders/wakeups, key-value state (SQLite `state.db`) |
@@ -590,6 +595,11 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   first run marks all existing recordings as seen (history is not news).
 - The shared `llm_contact.py` is imported from `~/Documents/agent-coding/shared` (`EA_SHARED_DIR` overrides); a
   Docker image without it fails at import on purpose rather than running without the preamble.
+- `note_to_eli` is recorded by `contact.check()`, not by the tool's handler: the handler has only the message,
+  while `check` has the system prompt, history and channel. Recording in both would file every note twice. The
+  server's copy of `shared/` is taken at `deploy` time, and `ea/contact.py` needs `NOTE_TOOL` from it, so code and
+  `shared/` always go up together (`atlas-server.sh deploy` does that). A note left during the fast-lane
+  keep-alive ping is recorded, but the model is told no tools ran (no tool runs for a keep-alive).
 - While the night block is on, nightblock's proxy answers 502 "could not reach" for a local service that is down
   (instead of a refused connection), so "the tracker is not running" has three spellings; `tracker_tools.guard`
   knows all three. `tests/test_tracker_open.py` fails at night without that.

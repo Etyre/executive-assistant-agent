@@ -5,6 +5,10 @@ the `contact_eli` tool, and every response is checked for a `contact_eli` call o
 found the contact is recorded in ~/Library/Application Support/LLMInbox/messages.jsonl (with the full context),
 Eli is notified, and the turn stops there: no retry, no further tool rounds. Eli reads and answers with `llm-inbox`.
 
+Every call also offers `note_to_eli` (2026-11-20), which leaves Eli a message and does NOT stop the turn: `check`
+records it (once, with the same context as a contact) and returns None, and the registry handler answers the call
+with the shared NOTE_RESULT_TEXT so the model carries on.
+
 The shared module lives outside this repo at /Users/elityre/Documents/agent-coding/shared (override with
 EA_SHARED_DIR). A deployment without it (the Docker image) must copy that folder in and point EA_SHARED_DIR at it.
 """
@@ -34,6 +38,9 @@ TOOL_NAME = CONTACT_TOOL["name"]
 # the MCP handler just before the turn is cut short).
 TOOL_RESULT = "Recorded and sent to Eli. This task stops here; he will follow up with you."
 NOT_RUN = "not run: this task stopped because you contacted Eli"
+NOTE_TOOL = llm_contact.NOTE_TOOL
+NOTE_NAME = NOTE_TOOL["name"]
+NOTE_RESULT = llm_contact.NOTE_RESULT_TEXT                # what the model sees after a note: delivered, carry on
 
 
 def system_prompt(instructions: str) -> str:
@@ -48,15 +55,34 @@ def register(reg: Any) -> None:
         log.warning("contact_eli called by the model: %s", message[:200])
         return TOOL_RESULT
 
+    # Both engines run tools through the registry, so this handler is what answers a note and lets the turn go on.
+    # It does not record: check() sees the same call in the response and records it there, once, with the context.
+    @reg.tool(NOTE_NAME, NOTE_TOOL["description"], NOTE_TOOL["input_schema"], writes=True)
+    def note_to_eli(message: str) -> str:
+        log.info("note_to_eli called by the model: %s", message[:200])
+        return NOTE_RESULT
+
 
 def check(*, model: str, system: Any, messages: Any, content: list[dict[str, Any]], tools: Any = None,
           stop_reason: str = "", extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Record and notify if the response contains a contact signal. Returns the inbox record, else None.
-    On a record the caller stops the task. Never raises: a broken inbox must not take the agent down."""
+    On a record the caller stops the task. Never raises: a broken inbox must not take the agent down.
+    `note_to_eli` calls are recorded here too (once per call, same context), but they return None: the turn goes on."""
+    noted = 0
+    response = {"role": "assistant", "content": content, "stop_reason": stop_reason, "model": model}
     try:
-        response = {"role": "assistant", "content": content, "stop_reason": stop_reason, "model": model}
+        for _, note in llm_contact.extract_notes(response):
+            n = llm_contact.record(APP, model, note, "note", _plain_system(system), messages, response, _plain_tools(tools),
+                                   extra={**(extra or {}), "halts": False})
+            noted += 1
+            log.info("the model left Eli a note (inbox %s), the turn carries on: %s", n["id"], note[:300])
+    except Exception:  # noqa: BLE001
+        log.exception("llm inbox note failed")
+    try:
         found = llm_contact.extract(response)              # same two signals llm_contact.check() looks for
         if not found:
+            if noted:
+                _relay()
             return None
         message = "\n\n".join(m for _, m in found)
         via = found[0][0] if len(found) == 1 else "+".join(sorted({v for v, _ in found}))
@@ -66,12 +92,16 @@ def check(*, model: str, system: Any, messages: Any, content: list[dict[str, Any
         log.exception("llm inbox check failed")
         return None
     log.warning("the model contacted Eli (inbox %s via %s): %s", rec["id"], rec["via"], rec["message"][:300])
+    _relay()
+    return rec
+
+
+def _relay() -> None:
     try:                                                   # on a server: copy it to the inbox on the Mac
         from . import inbox_relay
         inbox_relay.forward()
     except Exception:  # noqa: BLE001
         log.exception("inbox relay failed; the scheduler will try again")
-    return rec
 
 
 def stopped_text(rec: dict[str, Any]) -> str:
@@ -81,9 +111,11 @@ def stopped_text(rec: dict[str, Any]) -> str:
 
 def tool_results_for(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Pair every tool_use in the stopping response with a result, so the stored history stays valid for the
-    next turn (the contact itself gets TOOL_RESULT; anything else was not run)."""
+    next turn (the contact itself gets TOOL_RESULT, a note in the same response was recorded and gets NOTE_RESULT;
+    anything else was not run)."""
+    ours = {TOOL_NAME: TOOL_RESULT, NOTE_NAME: NOTE_RESULT}
     return [{"type": "tool_result", "tool_use_id": b["id"],
-             "content": TOOL_RESULT if b.get("name") == TOOL_NAME else NOT_RUN, "is_error": b.get("name") != TOOL_NAME}
+             "content": ours.get(b.get("name"), NOT_RUN), "is_error": b.get("name") not in ours}
             for b in content if b.get("type") == "tool_use"]
 
 

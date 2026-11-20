@@ -117,7 +117,7 @@ deploy)
   stage="$(mktemp -d)"; trap 'rm -rf "$stage"' EXIT
   git -C "$REPO" archive HEAD ea instructions requirements.txt deploy/Dockerfile deploy/docker-compose.yml .dockerignore | tar -x -C "$stage"
   mkdir "$stage/shared"
-  cp "$SHARED/llm_contact.py" "$SHARED/llm-system-prompt-preamble.md" "$SHARED/contact_eli_tool.json" "$stage/shared/"
+  cp "$SHARED/llm_contact.py" "$SHARED/llm-system-prompt-preamble.md" "$SHARED/contact_eli_tool.json" "$SHARED/note_to_eli_tool.json" "$stage/shared/"
   git -C "$REPO" log -1 --format='%h %s' > "$stage/VERSION"
   say "copying $(cat "$stage/VERSION") to $SERVER"
   "${RSYNC[@]}" --delete "$stage/" "$SERVER:$ROOT/app/"
