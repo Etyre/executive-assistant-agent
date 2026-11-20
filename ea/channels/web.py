@@ -207,6 +207,14 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
             e["reply"] = reply
             e["done"].set()
 
+    def _failed(m: "MessageIn") -> None:
+        """The turn threw and the message was not kept: forget its id, so a resend runs it instead of being told
+        "done, no reply" for a message nobody has. Anyone already waiting on it is released."""
+        with accepted_lock:
+            e = accepted.pop(m.message_id, None) if m.message_id else None
+        if e is not None:
+            e["done"].set()
+
     def _reply_of(entry: dict[str, Any]) -> str:
         entry["done"].wait(600)
         return entry["reply"]
@@ -281,10 +289,13 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         try:
             reply = await asyncio.to_thread(agent.handle, m.text, m.channel, "chat", client_id=m.client_id, images=images)
         except BaseException:
-            _settle(m, "")
+            _failed(m)
             raise
         _settle(m, reply)
-        _finish_turn(m, reply, x_device_token)
+        try:
+            _finish_turn(m, reply, x_device_token)
+        except Exception:  # noqa: BLE001 - the reply exists; a failed push must not turn it into an error
+            log.exception("after-turn push failed")
         return {"reply": reply}
 
     # ------------------------------------------------------------------ apps: devices, live events
@@ -528,13 +539,17 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
         def run() -> None:
             try:
                 reply = agent.handle(m.text, m.channel, "chat", on_event=emit, client_id=m.client_id, images=images)
-                _settle(m, reply)
-                emit({"type": "done", "reply": reply})
-                _finish_turn(m, reply, x_device_token)
             except Exception as e:  # noqa: BLE001 - the page shows it
-                _settle(m, "")
+                _failed(m)
                 log.exception("streamed turn failed")
                 emit({"type": "error", "error": f"{type(e).__name__}: {e}"})
+                return
+            _settle(m, reply)
+            emit({"type": "done", "reply": reply})
+            try:                                      # after "done": a failure here used to blank the stored reply and
+                _finish_turn(m, reply, x_device_token)     # send an error event behind a finished answer
+            except Exception:  # noqa: BLE001
+                log.exception("after-turn push failed")
 
         async def events() -> AsyncIterator[bytes]:
             task = asyncio.ensure_future(asyncio.to_thread(run))
