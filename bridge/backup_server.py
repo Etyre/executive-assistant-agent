@@ -6,7 +6,7 @@ and backing it up, including locally"). Run by launchd (com.elityre.ea-backup) a
 
 What is copied from /opt/atlas/data: transcripts/, memory/, workspace/, images/, the small state files, a consistent
 snapshot of state.db (taken with SQLite's own backup, not a copy of the live file), the Claude CLI's session files
-and the LLM inbox. Left out because their sources rebuild them: the Roam checkout and its index, the Otter index, the
+and the LLM inbox. Left out: the agent's log (up to 100 MB that changes daily). Left out because their sources rebuild them: the Roam checkout and its index, the Otter index, the
 document copies. Left out because they are secrets, which the Mac holds already: .env, the push key, the ssh key.
 
 Where: ~/Library/Application Support/Atlas/server-backup/snapshots/YYYY-MM-DD/, one folder per day. Unchanged files
@@ -37,7 +37,7 @@ SNAPSHOT_DB = (
     "s = sqlite3.connect('file:/data/state.db?mode=ro', uri=True); d = sqlite3.connect('/data/.backup/state.db.tmp'); "
     "s.backup(d); d.close(); s.close(); os.replace('/data/.backup/state.db.tmp', '/data/.backup/state.db')"
 )
-TOP_EXCLUDES = ["/home", "/roam", "/roam.db*", "/otter.db*", "/docs", "/.env", "*.p8", "/state.db*", "/.backup/*.tmp"]
+TOP_EXCLUDES = ["/home", "/logs", "/roam", "/roam.db*", "/otter.db*", "/docs", "/.env", "*.p8", "/state.db*", "/.backup/*.tmp"]
 PARTS = [  # (path on the server under DATA, excludes)
     ("", TOP_EXCLUDES),
     ("home/.claude/projects", []),

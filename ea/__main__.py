@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import pathlib
 import sys
 
 import uvicorn
@@ -45,6 +46,38 @@ def _setup_logging(verbose: bool) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+_FILE_LOG: logging.Handler | None = None
+
+
+class _NoHealthChecks(logging.Filter):
+    """Docker asks /health every minute; those lines would be most of the file."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
+def _log_to_file(data_dir: pathlib.Path) -> None:
+    """Also write the log to <data>/logs/atlas.log (20 MB x 5). On the server the only other copy is Docker's, which
+    belongs to the container and is thrown away by every deploy, so the log of what went wrong never outlived the
+    fix for it (found 2026-11-20). Called at start and again once uvicorn has set up its own loggers, which do not
+    reach the root; calling it twice adds nothing twice."""
+    import logging.handlers
+    global _FILE_LOG
+    if _FILE_LOG is None:
+        try:
+            (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+            h = logging.handlers.RotatingFileHandler(data_dir / "logs" / "atlas.log", maxBytes=20_000_000, backupCount=5, encoding="utf-8")
+        except OSError as e:
+            logging.getLogger("ea").warning("no log file in %s: %s", data_dir, e)
+            return
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        h.addFilter(_NoHealthChecks())
+        _FILE_LOG = h
+    for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):     # uvicorn's loggers do not propagate to the root
+        lg = logging.getLogger(name)
+        if (not name or not lg.propagate) and _FILE_LOG not in lg.handlers:
+            lg.addHandler(_FILE_LOG)
+
+
 def _outbound(agent: Agent, push: Push, tg: Telegram | None = None):
     """Everything the agent sends on its own initiative goes to: the apps (push), every open app/web page (live
     event), and Telegram if that legacy channel is configured."""
@@ -63,6 +96,7 @@ def _outbound(agent: Agent, push: Push, tg: Telegram | None = None):
 
 def cmd_serve(args: argparse.Namespace) -> None:
     s = config.load()
+    _log_to_file(pathlib.Path(s.data_dir))
     agent = Agent(s)
     push = Push(s)
     tg = Telegram(agent, s)
@@ -80,6 +114,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         # old process alive (still pinging the apps from a dead bus) next to the new one (seen 2026-11-06).
         server = uvicorn.Server(uvicorn.Config(app, host=s.channels.web_host, port=s.channels.web_port, log_level="info",
                                                timeout_graceful_shutdown=3))
+        _log_to_file(pathlib.Path(s.data_dir))
         tasks = [server.serve(), sched.run()]
         if tg.enabled():
             tasks.append(tg.run())

@@ -79,8 +79,9 @@ Mac is shut. Everything is driven from the Mac with one script, `deploy/server/a
 
 On the server: code in `/opt/atlas/app` (`VERSION` names the commit), state in `/opt/atlas/data` (never rebuilt),
 secrets in `/opt/atlas/data/.env` (mode 600), config in `/opt/atlas/config.toml` and `config.server.toml`, the
-agent's home folder (sessions, LLM inbox, the Roam deploy key) in `/opt/atlas/data/home`. Logs: `docker logs atlas`
-(20 MB × 5 kept).
+agent's home folder (sessions, LLM inbox, the Roam deploy key) in `/opt/atlas/data/home`. Logs:
+`/opt/atlas/data/logs/atlas.log` (20 MB × 5 kept, survives deploys, without the once-a-minute health checks);
+`docker logs atlas` has the same lines but only since the last deploy.
 
 On the Mac: server-only secrets in `data/server.env`; the bridge token in `data/.env` (`EA_BRIDGE_TOKEN`); the
 bridge's log in `~/Library/Logs/ea-bridge.log`; the backups of the server in
@@ -126,6 +127,10 @@ docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in
 ```
 
 ## Gotchas learned
+
+- **`docker logs atlas` starts empty after every deploy**: the log belongs to the container and `deploy` recreates
+  it, so until 2026-11-20 the record of a failure was gone by the time its fix shipped. The agent now also writes
+  `/opt/atlas/data/logs/atlas.log`, and `atlas-server.sh logs` follows that file.
 
 - **Never copy the live `state.db` as a file**: a copy taken mid-write can be unreadable. The backup asks SQLite
   inside the container for a snapshot (`/opt/atlas/data/.backup/state.db`) and copies that.

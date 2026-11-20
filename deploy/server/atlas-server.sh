@@ -230,6 +230,7 @@ status)
   echo "  backup of the server on this Mac: $("$REPO/.venv/bin/python" "$REPO/bridge/backup_server.py" --status 2>&1)"
   ;;
 
-logs) ssh -t "$SERVER" "$SUDO docker logs -f --tail ${1:-200} atlas" ;;
+# The file outlives deploys (Docker's own log goes with the container); before the first deploy that writes it, Docker's.
+logs) ssh -t "$SERVER" "if [ -f $ROOT/data/logs/atlas.log ]; then $SUDO tail -n ${1:-200} -F $ROOT/data/logs/atlas.log; else $SUDO docker logs -f --tail ${1:-200} atlas; fi" ;;
 ssh) ssh -t "$SERVER" ;;
 esac
