@@ -122,16 +122,21 @@ def test_which_labels_are_the_purchase_button():
         assert not FINAL.search(no), no
 
 
-def test_the_tools_are_only_there_when_switched_on():
+def test_which_tools_exist_in_each_mode():
     from ea.tools import food_tools
     from ea.tools.registry import ToolRegistry
 
     class Router:
         bridge = ""
-    reg = ToolRegistry()
-    food_tools.register(reg, Router(), config.Settings())
-    names = {t.name for t in reg.specs()}
-    assert {"food_view", "food_open", "food_click", "food_type", "food_scroll", "food_place_order", "food_orders"} <= names
+    browse = {"food_view", "food_open", "food_click", "food_type", "food_scroll"}
+    reg, s = ToolRegistry(), config.Settings()          # no spending limit: the agent chooses, Eli orders
+    food_tools.register(reg, Router(), s)
+    assert {t.name for t in reg.specs()} == browse
+    assert "you cannot order" in next(t.description for t in reg.specs() if t.name == "food_view")
+    reg, s = ToolRegistry(), config.Settings()
+    s.food.max_total_usd = 30.0
+    food_tools.register(reg, Router(), s)
+    assert {t.name for t in reg.specs()} == browse | {"food_place_order", "food_orders"}
 
 
 # ---------------------------------------------------------------- the real browser against a page of our own

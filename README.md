@@ -210,18 +210,23 @@ finishes; a Chromium that died is relaunched on the next call.
 
 ### Food ordering
 
-**Switched off (`[food] enabled = false`): it cannot sign in.** Grubhub lets an automated browser look at menus
-but answers its sign-in with a "Press & Hold" robot check that fails even when Eli presses it himself, and Google
-refuses its sign-in outright (both 2026-11-19). Getting past either means disguising the browser, which this
-project does not do. The code below works against a site that allows it and is kept for that.
+Built 2026-11-19 (Eli: a meal ordered every day without him thinking about it). **What runs today: the agent
+chooses, Eli orders.** The agent browses Grubhub's menus signed out, picks a dish that meets the requirements in
+its memory, and messages Eli the restaurant, the dish and options, the price, and the restaurant's link; the link
+opens that restaurant in the Grubhub app on his phone (web addresses in the apps' messages are tappable for this),
+where he adds the dish and pays. When the agent does this is its own daily wakeup (`schedule_wakeup` with
+`every_minutes`), set when Eli tells it the time.
 
-Built 2026-11-19 (Eli: a meal ordered every day without him thinking about it). The agent was to order on **Grubhub**
-with Eli's own account. Uber Eats was the first choice and is not usable: it answers an automated browser with a
-bot check (403), which this project does not try to get past; no delivery service offers individuals an ordering API.
+Ordering by the agent itself was the goal and is built below, but **no site allows it**: Uber Eats answers an
+automated browser with a bot check everywhere; Grubhub lets it read menus but answers its sign-in with a "Press &
+Hold" robot check that fails even when Eli presses it himself, and Google refuses its sign-in outright (all
+2026-11-19). Getting past those means disguising the browser, which this project does not do. With
+`[food] max_total_usd = 0` (today) the tools are the browsing ones only; above 0 `food_place_order` and
+`food_orders` appear, for a site where the browser can be signed in.
 
 - **Where it runs.** A Chrome with a profile of its own (`[food] profile`, never Eli's everyday Chrome) on the
-  Mac, headless, driven by the bridge (`POST /mac/food/<step>`). So an order needs the Mac awake. Eli signs in once
-  himself with `bridge/food_signin.py`; the agent never sees a password.
+  Mac, headless, driven by the bridge (`POST /mac/food/<step>`). So choosing a meal needs the Mac awake. (For a
+  site that allowed it, Eli would sign in once himself with `bridge/food_signin.py`; the agent never sees a password.)
 - **How the agent uses it** (`ea/connectors/site_browser.py`, `ea/tools/food_tools.py`). Each page comes back as
   text plus a numbered list of what can be clicked or typed into: `food_view` (with `find` for long menus),
   `food_open`, `food_click`, `food_type`, `food_scroll`. What to order and when is in the agent's memory and its
@@ -428,7 +433,12 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - **Grubhub blocks signing in from an automated browser** (2026-11-19): signed out, menus and the bag work, but
   the sign-in form leads to `grubhub.com/captcha/verify` ("Access to this page has been blocked", Press & Hold,
   "Please try again" for a real person too), and "Continue with Google" ends at Google's "This browser or app may
-  not be secure". So food ordering is off. Checking that a site lets the browser *sign in* comes before building.
+  not be secure". So the agent only chooses and Eli orders. Checking that a site lets the browser *sign in* comes
+  before building. Grubhub's restaurant pages loaded on the Mac but came up empty ("Prepare your taste buds...")
+  in the server's own Chromium, which is why the browsing stays on the Mac.
+- **`Text(someString)` in SwiftUI does not make URLs tappable**; only a literal or an `AttributedString` with link
+  attributes does (`Linkified` in `ChatView.swift`). Grubhub's app claims `/restaurant/*` links
+  (its `apple-app-site-association`); whether a dish-level link lands on the dish is not known.
 - **Uber Eats refuses automated browsers** (Cloudflare "Performing security verification", HTTP 403, from the Mac
   with the real Chrome, 2026-11-19); Grubhub does not. If Grubhub starts to, `food_view` returns `blocked` and the
   agent stops and says so. Do not add anything that disguises the browser.

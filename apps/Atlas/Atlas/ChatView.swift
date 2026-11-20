@@ -237,6 +237,27 @@ private struct NavWrap: ViewModifier {
 }
 #endif
 
+/// Message text with its web addresses made tappable (2026-11-19: the agent sends a link that opens a restaurant in
+/// its app, and a plain `Text(String)` shows a URL as dead text). The text itself is shown exactly as written; only
+/// http(s) links are marked. Kept per text, since bubbles are redrawn often.
+enum Linkified {
+    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static let cache: NSCache<NSString, NSAttributedString> = { let c = NSCache<NSString, NSAttributedString>(); c.countLimit = 400; return c }()
+
+    static func text(_ s: String) -> AttributedString {
+        if let hit = cache.object(forKey: s as NSString) { return AttributedString(hit) }
+        let out = NSMutableAttributedString(string: s)
+        if s.contains("http"), let detector {
+            for m in detector.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length)) {
+                guard let url = m.url, url.scheme == "https" || url.scheme == "http" else { continue }
+                out.addAttribute(.link, value: url, range: m.range)
+            }
+        }
+        cache.setObject(out, forKey: s as NSString)
+        return AttributedString(out)
+    }
+}
+
 struct MessageBubble: View {
     let message: Message
     var maxWidth: CGFloat = 560          // from the column width: selectable Text on macOS only wraps inside an explicit bound
@@ -255,7 +276,7 @@ struct MessageBubble: View {
                             }
                         }
                         if !message.text.isEmpty {
-                            Text(message.text)
+                            Text(Linkified.text(message.text))
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
                         }

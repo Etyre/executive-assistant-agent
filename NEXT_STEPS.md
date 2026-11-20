@@ -4,12 +4,14 @@ Written 2026-11-04; updated 2026-11-05 late evening (stage 2 built, see below). 
 passed, and the web chat at http://localhost:8800 answers (server started by hand with `python -m ea serve`;
 it stops when this terminal session ends). Every other channel still needs credentials only Eli can supply. In the order that gets something usable soonest:
 
-## Food ordering (2026-11-19): built, then switched off
+## Meals (2026-11-19): Atlas chooses, Eli orders in the Grubhub app
 
-Grubhub and Uber Eats both refuse an automated browser (Uber Eats everywhere; Grubhub at sign-in, and Google
-refuses its sign-in too), and no delivery service offers individuals an ordering API. The ordering code is in the
-repo, tested against a local page, with `[food] enabled = false`. Open to Eli: Atlas chooses the meal and sends
-him a link to confirm in the app (one tap); asking MealMe for API access; or a meal subscription.
+Grubhub and Uber Eats both refuse an automated browser that tries to order (README, "Food ordering"), so Atlas
+browses Grubhub's menus, picks a dish and messages a link that opens the restaurant in the Grubhub app. Built and
+live; Atlas has not yet made a real suggestion. To start it, Eli tells Atlas in chat: what the meal must be (the
+fixed requirements), which meal and what time each day, a rough budget, and the delivery address to use on the
+site. Needs the Grubhub app on the phone, and the Mac awake at that time. Not yet seen: the link opening the app
+from a message on the phone.
 
 ## Where things stand (2026-11-06 21:15)
 

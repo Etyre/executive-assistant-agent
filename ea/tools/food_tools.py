@@ -29,11 +29,21 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: Settings) -> No
     page = ("Returns the page as it now is: `text` (paged: next_offset), and `elements`, a numbered list of what can be "
             "clicked or typed into. The numbers hold only until the page changes, so use the ones from the latest result.")
 
-    @reg.tool("food_view", f"Ordering food for Eli on {site}, in a browser on his Mac that is signed in to his account. "
+    ordering = settings.food.max_total_usd > 0      # false: the agent chooses and Eli orders (the mode in use, see README)
+    how = ("in a browser on his Mac that is signed in to his account. " if ordering else
+           "in a browser on his Mac that is NOT signed in: you can read restaurants, menus, prices, fees and delivery "
+           "times, but you cannot order. Your job is to choose, so that Eli only has to tap. Choose one dish that "
+           "meets the requirements in your memory (and is not a repeat of the last few days), then send him ONE "
+           "message: the restaurant, the exact dish and every option to pick, the price and the estimated total with "
+           "fees, the delivery time shown, and on a line of its own the restaurant page's URL (the `url` of the "
+           "restaurant's menu page, starting https://www.grubhub.com/restaurant/). That link opens the restaurant in "
+           "the Grubhub app on his phone, where he adds the dish and pays. Then note in memory what you suggested. "
+           "Enter his delivery address first if the site does not show it (it remembers it afterwards). ")
+    @reg.tool("food_view", f"Choosing a meal for Eli on {site}, " + how +
               "This looks at the current page (the site's home page to begin with). `find` keeps only the elements whose "
               "label contains that text, which is how to find a dish on a long menu. " + page + " If the result has "
               "`blocked` (a bot check) or the site asks to sign in, stop and tell Eli; never try to get past either. "
-              "What Eli wants ordered, when, and what he has liked or not are in your memory, not here.",
+              "What Eli wants, when, and what he has liked or not are in your memory, not here.",
               {"properties": {"find": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}}})
     def food_view(find: str = "", offset: int = 0) -> Any:
         return step("view", find=find, offset=offset)
@@ -44,8 +54,7 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: Settings) -> No
         return step("open", url=url)
 
     @reg.tool("food_click", "Click element `n` of the current food-ordering page: a restaurant, a dish, an option, "
-              "'Add to bag', the tip, 'Checkout'. It will not press the button that places the order (food_place_order "
-              "does that). " + page, {"properties": {"n": {"type": "integer"}}, "required": ["n"]}, writes=True)
+              "'Add to bag', the tip, 'Checkout'. It never presses a button that places an order. " + page, {"properties": {"n": {"type": "integer"}}, "required": ["n"]}, writes=True)
     def food_click(n: int) -> Any:
         return step("click", n=n)
 
@@ -62,6 +71,9 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: Settings) -> No
               {"properties": {"pages": {"type": "number"}, "back": {"type": "boolean"}}}, writes=True)
     def food_scroll(pages: float = 1.0, back: bool = False) -> Any:
         return step("back") if back else step("scroll", pages=pages)
+
+    if not ordering:
+        return
 
     @reg.tool("food_place_order", "Place the order that is on the checkout page now: this spends Eli's money. Before "
               "calling it, read the checkout page (food_view) and check the items, the delivery address, the tip and "
