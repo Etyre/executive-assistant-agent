@@ -54,6 +54,7 @@ class Agent:
         self._ended: str | None = None
         self._inbox: list[dict[str, Any]] = []               # messages the user sent while a turn was running
         self._inbox_lock = threading.Lock()
+        self._reply_to: tuple[str, str] | None = None     # (channel, client id) of a message typed during a background turn
         self._turn_running = False
         self.on_message: Callable[[dict[str, Any]], None] | None = None   # every chat message, both ways (live feed)
         self.tracker = tracker_tools.register(self.tools, self.router, self.settings)
@@ -88,6 +89,7 @@ class Agent:
 
     # ------------------------------------------------------------------ plumbing
     def _send_outbound(self, text: str) -> None:
+        self._reply_to = None                 # the model is answering with send_message; its closing text is not a second reply
         if self.outbound:
             self.outbound(text)
         else:
@@ -122,6 +124,8 @@ class Agent:
             m["inflated"] = [self.images.inflate(b) for b in m.get("images", [])]
             self._emit(kind="turn", channel=m["channel"], label=m["text"][:160], msg=None)
             self._say("me", m["text"], m["channel"], m["client_id"], images=[b["source"]["name"] for b in m.get("images", [])])
+            if m["channel"] != "worker":
+                self._reply_to = (m["channel"], m["client_id"])
         return out
 
     def _drain_inbox(self) -> list[dict[str, Any]]:
@@ -171,8 +175,14 @@ class Agent:
             finally:
                 with self._inbox_lock:
                     self._turn_running = False
+            reply_to, self._reply_to = self._reply_to, None
             if mode == "chat":
                 self._say("it", reply, channel, client_id)
+            elif reply_to and reply and reply != "(no reply)":
+                # The user typed during a background turn and the model answered in its closing text rather than
+                # with send_message. A background turn's text is shown to nobody, so the answer was written and
+                # never seen (found 2026-11-20). It is their reply: show it.
+                self._say("it", reply, *reply_to)
             # Anything the user sent after the model had already finished starts the next turn right away.
             late = self._drain_inbox()
             if late:
@@ -184,7 +194,8 @@ class Agent:
                     self.handle("[worker results]\n" + text + "\n\nDecide what to do with these results: act on them, remember what "
                                 "matters, and message the user only if they need to know now.", "worker", "proactive", True, None, "")
                 else:
-                    self.handle(text, late[-1]["channel"], "chat", True, None, late[-1]["client_id"],
+                    typed = [m for m in late if m["channel"] != "worker"][-1]
+                    self.handle(text, typed["channel"], "chat", True, None, typed["client_id"],
                                 images=[b for m in late for b in m.get("images", [])])
             return reply
 
@@ -304,15 +315,19 @@ class Agent:
                     log.info("mid-turn message folded in: %s", _short(m["text"]))
                     if m["channel"] != "worker":             # the user is now waiting on what was a background turn
                         fast = self.settings.llm.fast_when_chatting
+                        if is_main and mode != "chat":
+                            self._reply_to = (m["channel"], m["client_id"])
                 # A row that carries something the user typed is filed under that message's channel, so the chat history
                 # shows it even when the turn it landed in is a background one (channel 'scheduler' is hidden there).
                 typed = [m for m in folded if m["channel"] != "worker"]
                 self.convo.append(thread, "user", results, typed[-1]["channel"] if typed else channel)
+                if typed and mode != "chat":
+                    channel = typed[-1]["channel"]           # the rest of this turn is the answer to it: file it where the chat shows it
                 for m in folded:
                     if m.get("stored") is not None:
                         m["stored"].set()
                 messages.append({"role": "user", "content": self.images.inflate_messages([{"role": "user", "content": results}])[0]["content"]})
-                if any(tu["name"] == "no_action_needed" for tu in resp.tool_uses):
+                if any(tu["name"] == "no_action_needed" for tu in resp.tool_uses) and not typed:      # ...unless the user just wrote: answer first
                     # Terminal by definition: the check is over. Otherwise the model can keep re-declaring it until
                     # the round limit (seen 2026-11-06: 14 wasted calls after the work was done).
                     final_text = final_text or next((tu.get("input", {}).get("reason", "") for tu in resp.tool_uses if tu["name"] == "no_action_needed"), "")
@@ -356,7 +371,9 @@ class Agent:
             return contact.stopped_text(e.record)
         except LLMError as e:
             log.error("agent sdk error: %s", e)
-            if user_msg_id is not None:
+            # Taken back only when the turn left nothing behind. After the first stored step, deleting the message
+            # left its answer and tool calls in the history with no question, and removed it from the chat.
+            if user_msg_id is not None and self.convo.last_id(thread) == user_msg_id:
                 self.convo.delete(user_msg_id)
             return f"(model error: {e})"
         if self._ended:

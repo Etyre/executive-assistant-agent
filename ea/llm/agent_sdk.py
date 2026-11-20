@@ -383,6 +383,8 @@ class AgentSDKRunner:
                     # Under the message's own channel, not the running turn's: a message typed during a heartbeat was
                     # stored as 'scheduler', which the chat history hides, so it vanished from the app (Eli, 2026-11-16).
                     self.convo.append(self._thread, "user", stored, m.get("channel") or self._channel)
+                    if m.get("channel") and m["channel"] != "worker":
+                        self._channel = m["channel"]     # what follows answers it: stored where the chat history shows it
                     if m.get("stored") is not None:
                         m["stored"].set()
                     state["result_seen"] = False
@@ -552,6 +554,9 @@ class AgentSDKRunner:
         t.start()
         t.join()
         if "error" in result:
+            # One attempt per window holds for a ping that fails too: without this it was tried again every 30 s
+            # until the cache expired, each try possibly a full read of the conversation.
+            self.convo.set("sdk_fast_ping_missed", time.time())
             raise LLMError(f"keep-alive: {type(result['error']).__name__}: {result['error']}")
         return result["out"]
 

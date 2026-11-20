@@ -1,6 +1,6 @@
 """Workers: the agent runs several tasks in parallel by delegating them (Eli, 2026-11-06).
 
-A worker is one isolated turn with the same tools and prompt, its own conversation thread (`worker:<id>`, kept
+A worker is one isolated turn with the same tools and prompt, its own conversation thread (`worker:<id>-<start time>`, kept
 out of the chat history), its own browser, and no access to the user's conversation beyond what the task says.
 When it finishes, its result goes to the main agent the way a message sent mid-turn does: folded into the
 running turn, or starting a new proactive turn. The user's conversation itself stays single-threaded."""
@@ -40,7 +40,9 @@ class Worker:
 
     @property
     def conv_thread(self) -> str:
-        return f"worker:{self.id}"
+        # The start time is part of the name: ids restart at 1 with every restart of the agent, and a worker over the
+        # API engine reads its thread's history, so worker 1 used to begin with an older worker 1's conversation.
+        return f"worker:{self.id}-{int(self.started)}"
 
     def describe(self) -> dict[str, Any]:
         d = {"id": self.id, "name": self.name, "task": self.task[:200], "started": dt.datetime.fromtimestamp(self.started).isoformat(timespec="seconds"),

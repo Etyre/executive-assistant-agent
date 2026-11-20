@@ -355,3 +355,48 @@ def test_message_sent_during_a_background_turn_still_shows_in_the_chat(monkeypat
     a = Agent(s, provider=p); p.agent = a
     a.run_check("heartbeat", "look around", kind="heartbeat")
     assert [(m["text"], m["channel"]) for m in a.convo.readable(10) if m["who"] == "me"][-1:] == [("whiteboard please (api)", "app")]
+
+
+def test_the_answer_to_a_message_typed_during_a_background_turn_reaches_the_user(monkeypatch):
+    """Found 2026-11-20: the user's message was shown (fixed 11-16) but the model's closing text, the answer, was
+    neither announced nor filed where the chat history shows it. And a check that ended with no_action_needed in the
+    same step never looked at the message at all."""
+    from ea import config
+    from ea.agent.core import Agent
+    from ea.llm.base import LLMResponse
+    config.load.cache_clear()
+    s = config.load()
+    s.sources.otter_logseq_graph = ""
+    calls, said = [], []
+
+    class P:
+        name = "scripted"
+        def __init__(self): self.agent = None
+        def complete(self, system, messages, tools, max_tokens, **kw):
+            calls.append(messages)
+            if len(calls) == 1:                          # the check decides nothing is needed; the user types just then
+                assert self.agent.submit("what's on today?", "app", "phone") is True
+                return LLMResponse(content=[{"type": "tool_use", "id": "t1", "name": "no_action_needed", "input": {"reason": "all quiet"}}], stop_reason="tool_use")
+            return LLMResponse(content=[{"type": "text", "text": "Two meetings and the memo."}], stop_reason="end_turn")
+    p = P()
+    a = Agent(s, provider=p); p.agent = a
+    a.on_message = said.append
+    a.run_check("midday", "look at things")
+    assert len(calls) == 2 and "what's on today?" in calls[1][-2]["content"][-1]["text"]      # the model was shown it
+    assert [(m["who"], m["text"], m["channel"]) for m in said] == [("me", "what's on today?", "app"), ("it", "Two meetings and the memo.", "app")]
+    assert [m["text"] for m in a.convo.readable(10)][-2:] == ["what's on today?", "Two meetings and the memo."]
+    # An ordinary check with nobody typing still says nothing to anyone.
+    said.clear(); calls.clear()
+    p.complete = lambda system, messages, tools, max_tokens, **kw: LLMResponse(content=[{"type": "text", "text": "noted, nothing to do"}], stop_reason="end_turn")
+    a.run_check("evening", "look again")
+    assert said == []
+
+
+def test_worker_threads_do_not_repeat_across_restarts():
+    import itertools
+    from ea.agent.workers import Worker
+    first = Worker("a", "t", "main")
+    Worker._ids = itertools.count(first.id)             # what a restart of the agent does to the counter
+    again = Worker("b", "t", "main")
+    again.started = first.started + 5
+    assert again.id == first.id and again.conv_thread != first.conv_thread

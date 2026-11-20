@@ -37,6 +37,15 @@ MAIN_THREAD = "main"
 MID_TURN_PREFIX = "[The user sent this while you were working; take it into account:]\n"
 
 
+class _Rows(list):
+    """Rows already fetched under the lock, with the two cursor methods the callers use."""
+    def fetchall(self) -> "_Rows":
+        return self
+
+    def fetchone(self) -> Any:
+        return self[0] if self else None
+
+
 class ConversationStore:
     def __init__(self, db_path: pathlib.Path, transcripts_dir: pathlib.Path):
         self.db_path = pathlib.Path(db_path)
@@ -51,9 +60,17 @@ class ConversationStore:
                 self._conn.execute(f"ALTER TABLE reminders ADD COLUMN {col} {ddl}")
         self._conn.commit()
 
+    def _q(self, sql: str, args: Any = ()) -> "_Rows":
+        """Every read goes through here. The connection is shared by the turn threads, the scheduler, the keep-alive
+        loop, workers and the web server; a read that overlapped a write either raised "bad parameter or other API
+        misuse" or came back empty, and `get` then answered its default as if the key were not there (a check run
+        twice, a session re-forked). Found 2026-11-20; the workspace store had the same fault on 11-12."""
+        with self._lock:
+            return _Rows(self._conn.execute(sql, args).fetchall())
+
     # ------------------------------------------------------------------ kv
     def get(self, key: str, default: Any = None) -> Any:
-        r = self._conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        r = self._q("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
         return json.loads(r["value"]) if r else default
 
     def set(self, key: str, value: Any) -> None:
@@ -73,7 +90,7 @@ class ConversationStore:
 
     def usage_totals(self, since_ts: float = 0.0) -> list[dict[str, Any]]:
         """Per (speed, billing) since a time; `unpriced` counts calls on a model with no known price."""
-        rows = self._conn.execute(
+        rows = self._q(
             "SELECT speed, billing, COUNT(*) AS calls, SUM(input) AS input, SUM(cache_read) AS cache_read, "
             "SUM(cache_write_5m + cache_write_1h) AS cache_write, SUM(output) AS output, SUM(cost_usd) AS cost_usd, "
             "SUM(cost_usd IS NULL) AS unpriced FROM llm_usage WHERE ts >= ? GROUP BY speed, billing ORDER BY speed, billing", (since_ts,))
@@ -81,10 +98,10 @@ class ConversationStore:
 
     def usage_rows(self, since_ts: float = 0.0) -> list[dict[str, Any]]:
         """Every recorded model call since a time, oldest first (for the per-day breakdown)."""
-        return [dict(r) for r in self._conn.execute("SELECT * FROM llm_usage WHERE ts >= ? ORDER BY id", (since_ts,))]
+        return [dict(r) for r in self._q("SELECT * FROM llm_usage WHERE ts >= ? ORDER BY id", (since_ts,))]
 
     def usage_first_ts(self) -> float | None:
-        return self._conn.execute("SELECT MIN(ts) FROM llm_usage").fetchone()[0]
+        return self._q("SELECT MIN(ts) FROM llm_usage").fetchone()[0]
 
     def append(self, thread: str, role: str, content: Any, channel: str = "") -> int:
         ts = time.time()
@@ -96,14 +113,14 @@ class ConversationStore:
         return int(cur.lastrowid)
 
     def last_id(self, thread: str) -> int:
-        return int(self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages WHERE thread=?", (thread,)).fetchone()[0])
+        return int(self._q("SELECT COALESCE(MAX(id), 0) FROM messages WHERE thread=?", (thread,)).fetchone()[0])
 
     def rows_between(self, thread: str, after_id: int, before_id: int | None = None) -> list[dict[str, Any]]:
         """Stored messages of a thread with after_id < id < before_id, oldest first (for agent/catchup.py)."""
         q, args = "SELECT id, ts, role, channel, content FROM messages WHERE thread=? AND id>?", [thread, after_id]
         if before_id is not None:
             q += " AND id<?"; args.append(before_id)
-        return [{**dict(r), "content": json.loads(r["content"])} for r in self._conn.execute(q + " ORDER BY id", args)]
+        return [{**dict(r), "content": json.loads(r["content"])} for r in self._q(q + " ORDER BY id", args)]
 
     def delete(self, msg_id: int) -> None:
         """Take back a message that never got an answer (a turn whose model call failed), so it does not sit in
@@ -120,10 +137,10 @@ class ConversationStore:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
     def history(self, thread: str, limit: int = 80) -> list[dict[str, Any]]:
-        rows = self._conn.execute("SELECT role, content FROM messages WHERE thread=? ORDER BY id DESC LIMIT ?",
+        rows = self._q("SELECT role, content FROM messages WHERE thread=? ORDER BY id DESC LIMIT ?",
                                   (thread, limit * 2)).fetchall()
         msgs = [{"role": r["role"], "content": json.loads(r["content"])} for r in reversed(rows)]
-        return window(msgs, limit)
+        return repair(window(msgs, limit))
 
     def readable(self, limit: int = 60, all_threads: bool = True) -> list[dict[str, Any]]:
         """The conversation as a person would read it, newest last: what the user said (not the scheduler's check
@@ -139,7 +156,7 @@ class ConversationStore:
         q = f"SELECT id, ts, role, channel, content FROM messages {where}" + ("" if all_threads else " AND thread=?") + " ORDER BY id DESC LIMIT ?"
         args = (limit * 2,) if all_threads else (self.current_thread(), limit * 2)
         out: list[dict[str, Any]] = []
-        for r in self._conn.execute(q, args).fetchall():
+        for r in self._q(q, args).fetchall():
             if r["role"] == "user" and r["channel"] == "scheduler":
                 continue
             content = json.loads(r["content"])
@@ -170,7 +187,7 @@ class ConversationStore:
         out: list[dict[str, Any]] = []
         names: dict[str, str] = {}
         q = "SELECT id, ts, role, channel, content FROM messages ORDER BY id DESC LIMIT ?"
-        rows = self._conn.execute(q, (limit * 2,)).fetchall()
+        rows = self._q(q, (limit * 2,)).fetchall()
         for r in reversed(rows):
             ts = dt.datetime.fromtimestamp(r["ts"]).isoformat(timespec="seconds")
             content = json.loads(r["content"])
@@ -201,7 +218,7 @@ class ConversationStore:
 
     # ------------------------------------------------------------------ document snapshots (for change notices)
     def doc_snapshot(self, name: str) -> tuple[float, str] | None:
-        r = self._conn.execute("SELECT mtime, text FROM doc_snapshots WHERE name=?", (name,)).fetchone()
+        r = self._q("SELECT mtime, text FROM doc_snapshots WHERE name=?", (name,)).fetchone()
         return (r["mtime"], r["text"]) if r else None
 
     def set_doc_snapshot(self, name: str, mtime: float, text: str) -> None:
@@ -243,12 +260,12 @@ class ConversationStore:
         q, args = "SELECT * FROM reminders WHERE sent_ts IS NULL", []
         if kind:
             q += " AND kind=?"; args.append(kind)
-        rows = self._conn.execute(q + " ORDER BY due_ts", args).fetchall()
+        rows = self._q(q + " ORDER BY due_ts", args).fetchall()
         return [dict(r) for r in rows]
 
     def due_reminders(self, now: float | None = None) -> list[dict[str, Any]]:
         now = now or time.time()
-        rows = self._conn.execute("SELECT * FROM reminders WHERE sent_ts IS NULL AND due_ts<=? ORDER BY due_ts", (now,)).fetchall()
+        rows = self._q("SELECT * FROM reminders WHERE sent_ts IS NULL AND due_ts<=? ORDER BY due_ts", (now,)).fetchall()
         return [dict(r) for r in rows]
 
     def mark_sent(self, rid: int, now: float | None = None) -> None:
@@ -289,6 +306,63 @@ def window(msgs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         if m["role"] == "user" and not _has_tool_result(m):
             return msgs[i:]
     return []
+
+
+INTERRUPTED = "(interrupted: this tool call has no recorded result)"
+
+
+def repair(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Make stored history acceptable to the API again: every tool_use is answered right after the assistant's turn,
+    and no tool_result is left without its call. Stored rows break that in ways the API then refuses with a 400,
+    and since a refused turn adds no rows the thread stayed refused (found by reading, 2026-11-20):
+    a restart or a crash while a tool ran (call stored, result never); a message the user typed while a tool was
+    running, stored between the call and its result; a response cut off at max_tokens with a half-written call.
+    Only the copy handed to the model is changed; the stored rows stay as they happened."""
+    out: list[dict[str, Any]] = []
+    i = 0
+    while i < len(msgs):
+        if msgs[i]["role"] != "assistant":
+            kept = _without_results(msgs[i])               # a result with no call before it in this window
+            if kept is not None:
+                out.append(kept)
+            i += 1
+            continue
+        calls: list[str] = []
+        while i < len(msgs) and msgs[i]["role"] == "assistant":
+            c = msgs[i].get("content")
+            calls += [b["id"] for b in (c if isinstance(c, list) else []) if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")]
+            out.append(msgs[i]); i += 1
+        users = []
+        while i < len(msgs) and msgs[i]["role"] == "user":
+            users.append(msgs[i]); i += 1
+        if not calls:
+            for u in users:
+                kept = _without_results(u)
+                if kept is not None:
+                    out.append(kept)
+            continue
+        got: dict[str, dict[str, Any]] = {}
+        for u in users:
+            for b in (u["content"] if isinstance(u.get("content"), list) else []):
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in calls:
+                    got.setdefault(b["tool_use_id"], b)
+        out.append({"role": "user", "content": [got.get(c) or {"type": "tool_result", "tool_use_id": c, "content": INTERRUPTED, "is_error": True}
+                                                for c in dict.fromkeys(calls)]})
+        for u in users:                                    # whatever else the user rows held (typed text, images) follows the results
+            kept = _without_results(u)
+            if kept is not None:
+                out.append(kept)
+    return out
+
+
+def _without_results(m: dict[str, Any]) -> dict[str, Any] | None:
+    c = m.get("content")
+    if not isinstance(c, list):
+        return m if c else None
+    rest = [b for b in c if not (isinstance(b, dict) and b.get("type") == "tool_result")]
+    if len(rest) == len(c):
+        return m
+    return {**m, "content": rest} if rest else None
 
 
 def _has_tool_result(m: dict[str, Any]) -> bool:
