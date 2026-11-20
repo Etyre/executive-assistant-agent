@@ -87,3 +87,11 @@ tomorrow with no block scheduled). Otherwise no_action_needed."""
 # name = "elityre.com"                              # the agent reads them as "elityre.com/<file>.md"
 # path = "~/Documents/Personal website/elityre.com/source_docs"
 # note = "the Markdown sources of the user's personal website: policies, habits, routines"
+
+# Ordering Eli a meal on a delivery site with his own account (README, "Food ordering"). The browser and these
+# limits are on the Mac; restart the bridge after changing them (bridge/install_bridge.sh).
+[food]
+enabled = false                 # true: the food_* tools exist
+max_total_usd = 0               # the most one order may cost, fees and tip included. 0 = browse only, no orders
+max_orders_per_day = 1
+

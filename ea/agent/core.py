@@ -19,7 +19,8 @@ from ..connectors.toggl import Toggl
 from ..llm.base import LLMError, Provider
 from ..llm.factory import make_provider
 from ..memory.store import MemoryStore
-from ..tools import assistant_tools, data_tools, memory_tools, otter_tools, roam_tools, tracker_tools, web_tools, worker_tools, workspace_tools
+from ..tools import (assistant_tools, data_tools, food_tools, memory_tools, otter_tools, roam_tools, tracker_tools, web_tools,
+                     worker_tools, workspace_tools)
 from ..tools.registry import ToolRegistry
 from . import prompt
 from .conversations import MID_TURN_PREFIX, ConversationStore, _clip
@@ -62,6 +63,8 @@ class Agent:
         roam_tools.register(self.tools, self.roam)
         if self.settings.sources.web_browsing:
             web_tools.register(self.tools, self.browser)
+        if self.settings.food.enabled:
+            food_tools.register(self.tools, self.router, self.settings)
         self.ui: Callable[[dict[str, Any]], None] | None = None      # set by the server: {"type":"ui","action":...} to the apps
         self.images = ImageStore(self.settings.data_dir / "images")
         self.workers = WorkerPool(self, max_workers=self.settings.llm.max_workers)

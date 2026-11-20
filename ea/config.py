@@ -116,6 +116,19 @@ class SourceSettings:
 
 
 @dataclasses.dataclass
+class FoodSettings:
+    """Ordering Eli a meal on a delivery site with his own account (ea/food.py; the browser runs on the Mac)."""
+    enabled: bool = False                     # the food_* tools exist, and an order may be placed
+    site: str = "Grubhub"
+    home: str = "https://www.grubhub.com/"
+    hosts: list[str] = dataclasses.field(default_factory=lambda: ["grubhub.com"])   # the only hosts that browser visits
+    max_total_usd: float = 0.0                # the most one order may cost, fees and tip included; 0 = no orders
+    max_orders_per_day: int = 1
+    address_env: str = "FOOD_ADDRESS_CONTAINS"   # data/.env on the Mac: text the checkout page's delivery address must contain
+    profile: str = "~/Library/Application Support/Atlas/food-browser"   # that browser's Chrome profile (holds the sign-in)
+
+
+@dataclasses.dataclass
 class ChannelSettings:
     telegram_token_env: str = "TELEGRAM_BOT_TOKEN"
     telegram_allowed_user_ids: list[int] = dataclasses.field(default_factory=list)
@@ -208,6 +221,7 @@ class Settings:
     llm: LLMSettings = dataclasses.field(default_factory=LLMSettings)
     sources: SourceSettings = dataclasses.field(default_factory=SourceSettings)
     channels: ChannelSettings = dataclasses.field(default_factory=ChannelSettings)
+    food: FoodSettings = dataclasses.field(default_factory=FoodSettings)
     checks: list[CheckSettings] = dataclasses.field(default_factory=list)
     document_roots: list[DocumentRoot] = dataclasses.field(default_factory=list)
     heartbeat: HeartbeatSettings = dataclasses.field(default_factory=HeartbeatSettings)

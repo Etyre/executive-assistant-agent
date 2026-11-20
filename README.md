@@ -208,6 +208,30 @@ calling thread's `ea_context`), each driven from a dedicated thread: Playwright'
 thread that made them, and tool calls arrive on arbitrary threads. A worker's browser closes when the worker
 finishes; a Chromium that died is relaunched on the next call.
 
+### Food ordering
+
+Built 2026-11-19 (Eli: a meal ordered every day without him thinking about it). The agent orders on **Grubhub**
+with Eli's own account. Uber Eats was the first choice and is not usable: it answers an automated browser with a
+bot check (403), which this project does not try to get past; no delivery service offers individuals an ordering API.
+
+- **Where it runs.** A Chrome with a profile of its own (`[food] profile`, never Eli's everyday Chrome) on the
+  Mac, headless, driven by the bridge (`POST /mac/food/<step>`). So an order needs the Mac awake. Eli signs in once
+  himself with `bridge/food_signin.py`; the agent never sees a password.
+- **How the agent uses it** (`ea/connectors/site_browser.py`, `ea/tools/food_tools.py`). Each page comes back as
+  text plus a numbered list of what can be clicked or typed into: `food_view` (with `find` for long menus),
+  `food_open`, `food_click`, `food_type`, `food_scroll`. What to order and when is in the agent's memory and its
+  own wakeups; tell it in conversation.
+- **What the browser refuses, whatever the model asks:** any host but `[food] hosts`; typing into a password or
+  card field; pressing a button that completes a purchase.
+- **Placing the order** (`ea/food.py`, on the Mac): `food_place_order(expected_total)` presses the button only when
+  ordering is on, fewer than `max_orders_per_day` were placed today, the checkout page shows exactly one total and
+  one purchase button, the total equals `expected_total` and is within `max_total_usd` (fees and tip included), and
+  the page shows the address in `FOOD_ADDRESS_CONTAINS` (`data/.env`) when that is set. The attempt is written to
+  `data/food_orders.jsonl` **before** the press, with a screenshot before and after in `data/food/`, so an attempt
+  whose outcome is unknown still uses up the day and is never repeated. `food_orders` shows the record.
+- The card is whatever is saved on the Grubhub account; a card with its own limit is the cap that holds if this
+  code is wrong.
+
 ### Roam and Otter
 
 - **Roam**: drop an export (JSON from Export All, or the Markdown zip/files) in `data/roam/`; the agent searches
@@ -305,6 +329,7 @@ words and everything else carries on.
 | `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs, installs into /Applications and relaunches the Mac app; own README) |
 | `apps/Atlas/auto_deploy.py`, `install-auto-deploy.sh` | launchd agent `com.elityre.atlas-app-deploy`: builds each new commit of the Mac app and installs it in /Applications once the agent is not mid-turn |
 | `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: what the Mac does for an agent running on a server (the three local services, document folders, opening the tracker, receiving LLM-inbox records), on the Tailscale address only |
+| `ea/food.py`, `ea/connectors/site_browser.py`, `ea/tools/food_tools.py`, `bridge/food_signin.py` | Food ordering: the limits and the order record; the signed-in browser; the agent's tools; the window Eli signs in through |
 | `ea/inbox_relay.py`, `ea/docs_mirror.py` | Server deployment only: copy LLM-inbox records to the Mac, and the Mac's document folders to the server, both through the bridge |
 | `deploy/` | `Dockerfile`, `docker-compose.yml`, `server/` (`atlas-server.sh`: provision, deploy, move the agent to a server and back; own README; `config.server.example.toml`), `macmini/` (launchd plist + `install.sh`), `calendar_script/` (`Code.gs` + manifest: the Google Apps Script that gives the agent calendar write access; setup steps at the top of `Code.gs`), `sheet_reader_script/` (the read-only script bound to each Google Sheet the agent may read) |
 | `ios/SHORTCUT.md` | Action button / Siri setup |
@@ -341,6 +366,8 @@ words and everything else carries on.
 cd ~/Documents/agent-coding/executive-assistant-agent
 /opt/homebrew/bin/python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt   # done already
 .venv/bin/python -m playwright install chromium   # once, for web browsing
+.venv/bin/python bridge/food_signin.py            # food ordering: opens a window to sign in to Grubhub (again if it signs out)
+.venv/bin/python -m pytest -q tests/test_food.py  # food ordering end to end against a local page, real Chrome, no real order
 cp config.example.toml config.toml           # edit: agent_name, timezone, apns_bundle_id, checks
 cp .env.example data/.env                    # fill in ANTHROPIC_API_KEY, TOGGL_API_TOKEN, EXERCISE_EXPORT_URL, TELEGRAM_BOT_TOKEN, EA_WEB_TOKEN
 .venv/bin/python scripts/import_tracker_settings.py   # copy exercise URL + calendar feeds from the tracker's config
@@ -393,6 +420,15 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   `CALENDAR_WRITE_TOKEN` in `data/.env`, and its `/exec` URL in `CALENDAR_WRITE_URL`. Steps at the top of `Code.gs`.
 - The `claude` login on this Mac (the subscription the `agent_sdk` engine bills); `ANTHROPIC_API_KEY` in
   `data/.env` is the fallback when the window is used up.
+- **Uber Eats refuses automated browsers** (Cloudflare "Performing security verification", HTTP 403, from the Mac
+  with the real Chrome, 2026-11-19); Grubhub does not. If Grubhub starts to, `food_view` returns `blocked` and the
+  agent stops and says so. Do not add anything that disguises the browser.
+- **The food browser's sign-in must be made in the window Playwright opens** (`bridge/food_signin.py`), not in a
+  Chrome started by hand on the same profile: Playwright starts Chrome with a mock keychain, and cookies written
+  under the real one cannot be read back.
+- **Grubhub pages**: a dish opens as a dialog (the tools then show only the dialog); its add button reads "Make 1
+  required selection" until the required options are chosen; address boxes only suggest while keys arrive, so
+  `food_type` types key by key.
 - **A tool result over about 25,000 tokens never reaches the model**: the CLI saves it to a file and returns an
   error instead. `sleep_summary` did this from 2026-11-19 (Sleep Bandit's answer is 100,000 characters whatever
   `days` is, nearly all per-dose tables), so the connector trims it to 36,000 characters. The registry cuts any

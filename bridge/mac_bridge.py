@@ -9,6 +9,8 @@ only, and wants the token in an `X-Bridge-Token` header. It does these things an
   POST /mac/open-tracker   starts the Project Tracker app when its API is down
   POST /mac/close-tracker  quits it (launcher and Python)
   GET  /mac/image?path=    an image file in Downloads or Desktop (a screenshot whose path Eli wrote in a message)
+  POST /mac/food/<step>    one step in the signed-in food-ordering browser (ea/food.py): view, open, click, type,
+                           scroll, back, place, orders, close
   POST /inbox              appends an LLM-inbox record written on the server to this Mac's inbox, so `llm-inbox`
                            and the page on :8798 show it (the promise in the shared preamble is kept from here)
   GET  /tracker-copy       a snapshot of the tracker's database, config and documents, for the read-only copy on the server
@@ -23,6 +25,7 @@ Run by hand:  .venv/bin/python bridge/mac_bridge.py        (EA_BRIDGE_HOST=127.0
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -280,6 +283,29 @@ def mac_image(path: str, request: Request) -> Response:
     except PermissionError:
         raise HTTPException(403, "macOS did not let the bridge read that folder (System Settings, Privacy & Security, Files and Folders)")
     return Response(raw, media_type=media)
+
+
+_food = None
+
+
+@app.post("/mac/food/{step}")
+async def food(step: str, request: Request) -> dict:
+    """One step of ordering a meal in the signed-in browser on this Mac (ea/food.py): look at the page, click,
+    type, or place the order. What may be bought is decided there, from this Mac's config.toml, not by the caller."""
+    _auth(request)
+    global _food
+    sys.path.insert(0, str(REPO)) if str(REPO) not in sys.path else None
+    from ea import config as ea_config
+    from ea.food import FoodDesk
+    settings = ea_config.load()
+    if not settings.food.enabled:
+        raise HTTPException(403, "food ordering is switched off on the Mac ([food] enabled in config.toml)")
+    if _food is None:
+        _food = FoodDesk(settings.food, settings.data_dir)
+    raw = await request.body()
+    args = json.loads(raw) if raw else {}
+    out = await asyncio.to_thread(_food.op, step, args if isinstance(args, dict) else {})
+    return out if isinstance(out, dict) else {"result": out}
 
 
 @app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])

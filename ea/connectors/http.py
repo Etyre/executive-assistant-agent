@@ -39,12 +39,13 @@ class ServiceRouter:
     def describe(self) -> str:
         return f"bridge {self.bridge}" if self.bridge else "direct (localhost)"
 
-    def mac(self, method: str, path: str, body: Any = None, raw: bool = False, params: dict[str, Any] | None = None) -> Any:
+    def mac(self, method: str, path: str, body: Any = None, raw: bool = False, params: dict[str, Any] | None = None,
+            timeout: float | None = None) -> Any:
         """A call to the bridge itself (not one of the three services): /mac/open-tracker, /inbox, /documents.
         `raw`: the response body as bytes instead of parsed JSON."""
         if not self.bridge or not self.token:
             raise SourceError("no Mac bridge configured (sources.bridge_url)")
-        with httpx.Client(base_url=self.bridge, timeout=self.s.timeout_seconds, headers={"X-Bridge-Token": self.token}) as c:
+        with httpx.Client(base_url=self.bridge, timeout=timeout or self.s.timeout_seconds, headers={"X-Bridge-Token": self.token}) as c:
             if not raw:
                 return send_json(c, method, path, body, **(params or {}))
             try:
