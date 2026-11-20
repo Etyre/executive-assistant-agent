@@ -64,7 +64,9 @@ class Toggl:
         if self.via_focus:
             with self.router.client("focus") as c:
                 return list(get_json(c, "/api/toggl/entries", days=days) or [])
-        end = dt.date.today() + dt.timedelta(days=1)
+        # Two days ahead, not one: Toggl reads a bare date as midnight UTC, which is the afternoon in the Americas, so
+        # with tomorrow as the end this evening's entries would be left out. Extra future days cost nothing.
+        end = dt.date.today() + dt.timedelta(days=2)
         start = dt.date.today() - dt.timedelta(days=days)
         raw = self._get("/me/time_entries", start_date=start.isoformat(), end_date=end.isoformat()) or []
         return [self._shape(e) for e in raw]

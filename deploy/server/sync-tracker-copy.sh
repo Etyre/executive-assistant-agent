@@ -16,7 +16,9 @@ etag="$(cat $ROOT/etag 2>/dev/null || true)"
 code="$(curl -s -m 120 -o $ROOT/incoming.tar -D $ROOT/incoming.headers -w '%{http_code}' -H "X-Bridge-Token: $TOKEN" ${etag:+-H "If-None-Match: $etag"} "$BRIDGE/tracker-copy")"
 stamp() { date +%s > $ROOT/data/replica_synced_at; chown 1000:1000 $ROOT/data/replica_synced_at; }
 case "$code" in
-304) stamp ;;
+304) stamp
+  # Unchanged data, but make sure the copy is running: a start that failed used to be final until the Mac's data changed.
+  $COMPOSE up -d >/dev/null 2>&1 || echo "$(date "+%F %T") the copy is not running and did not start" ;;
 200)
   rm -rf $ROOT/incoming && mkdir $ROOT/incoming && tar -xf $ROOT/incoming.tar -C $ROOT/incoming --no-same-owner || { echo "$(date "+%F %T") bad tar from the Mac"; exit 1; }
   [ -s $ROOT/incoming/tracker.sqlite3 ] || { echo "$(date "+%F %T") no database in the tar"; exit 1; }
@@ -24,8 +26,11 @@ case "$code" in
   rm -f $ROOT/data/tracker.sqlite3-wal $ROOT/data/tracker.sqlite3-shm
   mv -f $ROOT/incoming/* $ROOT/data/ && stamp
   chown -R 1000:1000 $ROOT/data && chmod 700 $ROOT/data
-  $COMPOSE up -d >/dev/null 2>&1 || echo "$(date "+%F %T") the copy did not start"
-  sed -n 's/^[Ee][Tt]ag: *//p' $ROOT/incoming.headers | tr -d '\r' > $ROOT/etag
+  if $COMPOSE up -d >/dev/null 2>&1; then
+    sed -n 's/^[Ee][Tt]ag: *//p' $ROOT/incoming.headers | tr -d '\r' > $ROOT/etag
+  else
+    rm -f $ROOT/etag; echo "$(date "+%F %T") the copy did not start"          # no etag: the next run fetches and tries again
+  fi
   echo "$(date "+%F %T") copy updated from the Mac ($(du -h $ROOT/data/tracker.sqlite3 | cut -f1))"
   ;;
 000) ;;                                                              # the Mac is asleep or away

@@ -325,6 +325,7 @@ words and everything else carries on.
 | `ea/contact.py` | The shared LLM inbox: preamble on every system prompt, the `contact_eli` (stops) and `note_to_eli` (carries on) tools, `check()` after every response |
 | `ea/agent/core.py` | The loop: one turn in, tool calls until the model stops, one reply out; mid-turn messages; SDK vs API dispatch |
 | `ea/agent/prompt.py` | System prompt: stable cached block + volatile block (clock, channel, memory index, reminders) |
+| `ea/sqlite_locked.py` | One SQLite connection safe to share between threads (used by the Roam and Otter indexes) |
 | `ea/agent/conversations.py` | History, transcripts, reminders/wakeups, key-value state (SQLite `state.db`) |
 | `ea/agent/workers.py` | Background workers (`delegate`): isolated turns in parallel, results handed back to the main agent |
 | `ea/llm/base.py` | Neutral shapes: `ToolSpec`, `LLMResponse`, `Provider` |
@@ -483,6 +484,25 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 - The LLM inbox's own settings (`NTFY_TOPIC`, email) are in `~/Library/Application Support/LLMInbox/config.env`.
 
 ## Gotchas learned
+
+- **A review on 2026-11-20 found the same fault in five stores**: one SQLite connection shared by threads, with the
+  writes locked and the reads not. A read that overlapped a write raised "bad parameter or other API misuse" or, in
+  the conversation store, came back empty, so `get` answered its default for a key that exists (a check run twice,
+  the chat session re-forked). Every read now takes the store's lock; the Roam and Otter indexes use
+  `ea/sqlite_locked.py`, where `with conn:` also keeps readers out of a half-done rebuild. A new store should use it.
+- **Calendar days are local days.** `recurring_ical_events.between(start, end)` with bare dates returns each event
+  by its own zone's day, and Google writes one-off events in UTC, so an event at 19:00 Pacific was missing from its
+  own day. The connector asks for a day on each side and keeps events by the app's time zone.
+- **A queued tracker change is dropped only when the tracker says no** (a 4xx of its own). The Mac asleep, the
+  tracker app closed (the bridge's 502) or a timeout mean "not yet": one replay with the app closed used to empty
+  the outbox. A new change also waits behind older queued ones instead of overtaking them.
+- **History sent to the API is repaired first** (`conversations.repair`): a tool call whose result was never stored
+  (a restart mid-tool) or a typed message stored between a call and its result made every fallback turn fail, and
+  a failed turn adds no rows, so it stayed failed. Stored rows are left as they happened.
+- **A message typed during a background turn**: its answer is now shown and stored in the chat even when the model
+  answers in its closing text instead of `send_message`.
+- **`apns-expiration: 0` means "try once"**: a reminder sent while the phone had no signal was never shown. It is now
+  a day. The alert is cut by bytes (Apple's 4096-byte limit), not characters.
 
 - **The tracker tools say "priority", 1 highest; the tracker stores `importance`, 5 highest** (2026-11-20, Eli: "it's
   not an importance, it's a priority"). `ea/tools/tracker_tools.py` translates both ways (`priority = 6 - importance`)

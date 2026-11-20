@@ -14,7 +14,15 @@ from .. import config
 
 
 class SourceError(RuntimeError):
-    pass
+    """`status`: the HTTP status when the service answered with an error; None when it could not be reached or
+    did not answer in time (so a caller can tell "refused" from "not there")."""
+    status: int | None = None
+
+
+def _refused(message: str, status: int) -> SourceError:
+    e = SourceError(message)
+    e.status = status
+    return e
 
 
 class ServiceRouter:
@@ -53,7 +61,7 @@ class ServiceRouter:
                 r.raise_for_status()
                 return r.content
             except httpx.HTTPStatusError as e:
-                raise SourceError(f"{method} {path} -> {e.response.status_code}: {e.response.text[:300]}") from e
+                raise _refused(f"{method} {path} -> {e.response.status_code}: {e.response.text[:300]}", e.response.status_code) from e
             except httpx.HTTPError as e:
                 raise SourceError(_unreachable(c, e) or f"{method} {path}: {e}") from e
 
@@ -74,7 +82,7 @@ def get_json(client: httpx.Client, path: str, **params: Any) -> Any:
         r.raise_for_status()
         return r.json()
     except httpx.HTTPStatusError as e:
-        raise SourceError(f"{e.request.url} -> {e.response.status_code}: {e.response.text[:300]}") from e
+        raise _refused(f"{e.request.url} -> {e.response.status_code}: {e.response.text[:300]}", e.response.status_code) from e
     except httpx.HTTPError as e:
         raise SourceError(_unreachable(client, e) or f"{path}: {e}") from e
 
@@ -85,6 +93,6 @@ def send_json(client: httpx.Client, method: str, path: str, body: Any = None, **
         r.raise_for_status()
         return r.json() if r.content else None
     except httpx.HTTPStatusError as e:
-        raise SourceError(f"{method} {e.request.url} -> {e.response.status_code}: {e.response.text[:300]}") from e
+        raise _refused(f"{method} {e.request.url} -> {e.response.status_code}: {e.response.text[:300]}", e.response.status_code) from e
     except httpx.HTTPError as e:
         raise SourceError(_unreachable(client, e) or f"{method} {path}: {e}") from e

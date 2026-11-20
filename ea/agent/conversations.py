@@ -115,6 +115,13 @@ class ConversationStore:
     def last_id(self, thread: str) -> int:
         return int(self._q("SELECT COALESCE(MAX(id), 0) FROM messages WHERE thread=?", (thread,)).fetchone()[0])
 
+    def has_rows_before(self, thread: str, before_id: int | None = None) -> bool:
+        """Whether the thread holds anything older than message `before_id` (or anything at all)."""
+        q, args = "SELECT 1 FROM messages WHERE thread=?", [thread]
+        if before_id is not None:
+            q += " AND id<?"; args.append(before_id)
+        return bool(self._q(q + " LIMIT 1", args))
+
     def rows_between(self, thread: str, after_id: int, before_id: int | None = None) -> list[dict[str, Any]]:
         """Stored messages of a thread with after_id < id < before_id, oldest first (for agent/catchup.py)."""
         q, args = "SELECT id, ts, role, channel, content FROM messages WHERE thread=? AND id>?", [thread, after_id]

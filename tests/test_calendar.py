@@ -158,3 +158,65 @@ def test_sheet_records_are_keyed_by_column_and_skip_empty_cells(monkeypatch):
     monkeypatch.delenv("READ_SHEETS")
     with pytest.raises(sr.SourceError):
         sr.SheetReader(config.load()).rows("blocks")
+
+
+UTC_ICS = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:test
+BEGIN:VEVENT
+UID:eve-before
+SUMMARY:Dinner the night before
+DTSTART:20261120T030000Z
+DTEND:20261120T040000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:noon
+SUMMARY:Lunch
+DTSTART:20261120T200000Z
+DTEND:20261120T210000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:evening
+SUMMARY:Evening call
+DTSTART:20261121T030000Z
+DTEND:20261121T040000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:allday
+SUMMARY:Conference
+DTSTART;VALUE=DATE:20261119
+DTEND;VALUE=DATE:20261121
+END:VEVENT
+BEGIN:VEVENT
+UID:allday-tomorrow
+SUMMARY:Day off
+DTSTART;VALUE=DATE:20261121
+DTEND;VALUE=DATE:20261122
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+def test_a_day_is_the_local_day_not_the_utc_one(monkeypatch):
+    """Google writes one-off events in UTC. An evening event (19:00 Pacific is 03:00 UTC the next day) was missing
+    from its own day, and the evening before was listed instead."""
+    monkeypatch.setenv("CALENDAR_ICS_URLS", "https://cal.example/a.ics")
+    config.load.cache_clear()
+    s = config.load()
+    s.timezone = "America/Los_Angeles"
+    monkeypatch.setattr(cal_mod.httpx, "get", lambda url, **kw: httpx.Response(200, content=UTC_ICS.encode(), request=httpx.Request("GET", url)))
+    ev = cal_mod.Calendar(s).events(dt.date(2026, 11, 20), days=1)
+    assert [(e["date"], e["title"], e["start"]) for e in ev] == [
+        ("2026-11-19", "Conference", None),                   # an all-day event still running today, under its own start date
+        ("2026-11-20", "Lunch", "12:00"), ("2026-11-20", "Evening call", "19:00")]
+
+
+def test_a_stale_copy_of_an_unreachable_feed_comes_with_a_warning(monkeypatch):
+    monkeypatch.setenv("CALENDAR_ICS_URLS", "https://cal.example/a.ics")
+    config.load.cache_clear()
+    monkeypatch.setattr(cal_mod.httpx, "get", lambda url, **kw: httpx.Response(200, content=ICS.encode(), request=httpx.Request("GET", url)))
+    c = cal_mod.Calendar(config.load())
+    assert c.events(dt.date(2026, 11, 5)) and c.last_errors == []
+    c._cache = {u: (t - 3600, body) for u, (t, body) in c._cache.items()}        # an hour old, and now the feed is down
+    monkeypatch.setattr(cal_mod.httpx, "get", lambda url, **kw: (_ for _ in ()).throw(httpx.ConnectError("down")))
+    assert c.events(dt.date(2026, 11, 5)) and "unreachable" in c.last_errors[0]

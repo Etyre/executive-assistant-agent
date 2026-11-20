@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .. import config
+from ..sqlite_locked import LockedConnection
 from .http import SourceError
 
 log = logging.getLogger(__name__)
@@ -220,10 +221,11 @@ class Otter:
         self.tz = ZoneInfo(s.timezone)
         self._client = client
         self._now = now
-        self._lock = threading.RLock()
         self.db_path = db_path or s.data_dir / "otter.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # Shared by the agent, its workers and the scheduler: see sqlite_locked. A search during a rebuild waits for it.
+        self._conn = LockedConnection(self.db_path)
+        self._lock = self._conn.lock
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS transcripts (

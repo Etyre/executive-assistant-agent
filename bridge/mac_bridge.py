@@ -314,6 +314,10 @@ async def proxy(service: str, path: str, request: Request) -> Response:
     if service not in UPSTREAMS:
         raise HTTPException(404, "unknown service")
     full = "/" + path
+    # The rules below are matched against the path as written, and the request is then sent on by a client that
+    # resolves "..": "/api/x/../questions/queue" passed the read rules and arrived as the refused path.
+    if "//" in full or any(seg in (".", "..") for seg in full.split("/")):
+        raise HTTPException(400, "path segments '.', '..' and '//' are not accepted")
     if not _allowed(request.method, service, full):
         raise HTTPException(403, f"{request.method} {full} is not allowed through the bridge")
     headers = {h: request.headers[h] for h in PASS_HEADERS if h in request.headers}

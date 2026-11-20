@@ -42,6 +42,8 @@ def app_pids(app: pathlib.Path) -> list[int]:
 # One lock for every read-modify-write of the outbox file, across every ProjectTracker in the process (the tools
 # and the scheduler each have one).
 _OUTBOX = threading.Lock()
+_REPLAY = threading.RLock()            # one replay at a time, and a new change waits for it (see _send)
+_replaying = False                     # read and written only while holding _REPLAY
 
 BESIDE = ("The Project Tracker's server runs on the server beside you, not as an app on Eli's Mac, so there is nothing "
           "for you to open or close. If it is not answering, tell Eli: `deploy/tailnet/server.sh status` in the tracker's project.")
@@ -91,12 +93,20 @@ class ProjectTracker:
         return out
 
     def _send(self, method: str, path: str, body: Any = None, **params: Any) -> Any:
-        try:
-            with self._c() as c:
-                return send_json(c, method, path, body, **params)
-        except SourceError as e:
-            if not self._away(e):
-                raise
+        behind = False
+        if self.copy_url and self._outbox():
+            # Older changes are still waiting for the Mac. Sending this one first would let them land on top of it
+            # a minute later (the schedule set at night overwriting the one set this morning). Make them now; if
+            # they still cannot be made, this one queues behind them.
+            with _REPLAY:
+                behind = _replaying or self.replay()["waiting"] > 0
+        if not behind:
+            try:
+                with self._c() as c:
+                    return send_json(c, method, path, body, **params)
+            except SourceError as e:
+                if not self._away(e):
+                    raise
         rec = {"at": time.time(), "id": os.urandom(6).hex(), "method": method, "path": path, "body": body,
                "params": {k: v for k, v in params.items() if v is not None}}
         with _OUTBOX:
@@ -131,21 +141,33 @@ class ProjectTracker:
         """Make the waiting changes on the Mac, oldest first. Stops at the first one that finds the Mac away again;
         one the tracker refuses is dropped and remembered (failed_path) so the next tracker tool result says so.
         While the Mac is away the file is not touched at all."""
-        waiting, done, failed = self._outbox(), 0, 0
-        left = len(waiting)
-        for rec in waiting:
+        global _replaying
+        with _REPLAY:
+            if _replaying:                     # called from inside a replay (a change made by one of its own steps)
+                return {"done": 0, "failed": 0, "waiting": len(self._outbox())}
+            _replaying = True
             try:
-                with self._c() as c:
-                    send_json(c, rec["method"], rec["path"], rec.get("body"), **rec.get("params", {}))
-                done += 1
-            except SourceError as e:
-                if MAC_AWAY[:30] in str(e):
-                    break
-                failed += 1
-                with open(self.failed_path, "a") as f:
-                    f.write(json.dumps({**rec, "error": str(e)[:300]}, ensure_ascii=False) + "\n")
-            left = self._settled(rec)
-        return {"done": done, "failed": failed, "waiting": left}
+                waiting, done, failed = self._outbox(), 0, 0
+                left = len(waiting)
+                for rec in waiting:
+                    try:
+                        with self._c() as c:
+                            send_json(c, rec["method"], rec["path"], rec.get("body"), **rec.get("params", {}))
+                        done += 1
+                    except SourceError as e:
+                        # Dropped only when the tracker itself said no (not found, invalid). The Mac away, the
+                        # tracker app quit or restarting (the bridge's 502), a timeout, a wrong token: those are
+                        # "not now", and the change waits. They used to count as refusals, so one pass with the
+                        # tracker app closed emptied the whole outbox (found 2026-11-20).
+                        if not (e.status is not None and 400 <= e.status < 500 and e.status not in (401, 403, 408, 429)):
+                            break
+                        failed += 1
+                        with open(self.failed_path, "a") as f:
+                            f.write(json.dumps({**rec, "error": str(e)[:300]}, ensure_ascii=False) + "\n")
+                    left = self._settled(rec)
+                return {"done": done, "failed": failed, "waiting": left}
+            finally:
+                _replaying = False
 
     def take_notes(self) -> list[str]:
         """What a tool result should carry besides its data: "this is the copy", and changes that failed on replay."""
@@ -199,6 +221,11 @@ class ProjectTracker:
         if self._beside():
             return {"ok": False, "error": BESIDE}
         if not self.running():
+            try:
+                self.ping()
+            except SourceError as e:
+                if MAC_AWAY[:30] in str(e):                    # asleep is not closed: the app is still open on the Mac
+                    return {"ok": False, "error": str(e)}
             return {"ok": True, "status": "already closed"}
         if self.router.via_bridge("tracker"):
             try:

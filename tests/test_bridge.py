@@ -332,8 +332,26 @@ def test_tracker_with_the_mac_asleep_reads_the_copy_and_queues_changes(tmp_path,
     assert [r["body"]["title"] for r in tr._outbox()] == ["the script"]
     assert tr.replay()["waiting"] == 0 and [c[2]["title"] for c in state["mac_calls"]] == ["the video", "the script"]
 
-    # moving, archiving and restoring go to the tracker's own routes
     monkeypatch.setattr(pt, "send_json", real_send)
+    # The Mac awake but the tracker app closed (the bridge answers 502), or slow: "not now", not "refused". One pass
+    # like that used to empty the outbox into the failed file (2026-11-20).
+    state["awake"], state["mac_calls"] = False, []
+    reg.dispatch("tracker_create_task", {"title": "queued at night"})
+    state["awake"], state["refuse"] = True, None
+    real_mac = mac
+
+    def app_closed(req):
+        return httpx.Response(502, json={"detail": "tracker is not answering on the Mac"})
+    monkeypatch.setattr(router, "client", lambda service: real_client(base_url="http://mac:8799/tracker", transport=httpx.MockTransport(app_closed),
+                                                                      headers={"X-Bridge-Token": "t"}))
+    assert tr.replay() == {"done": 0, "failed": 0, "waiting": 1} and not tr.failed_path.exists()
+    monkeypatch.setattr(router, "client", lambda service: real_client(base_url="http://mac:8799/tracker", transport=httpx.MockTransport(real_mac),
+                                                                      headers={"X-Bridge-Token": "t"}))
+    # A change made now goes after the ones still waiting, not before them.
+    reg.dispatch("tracker_create_task", {"title": "made this morning"})
+    assert [c[2]["title"] for c in state["mac_calls"]] == ["queued at night", "made this morning"] and tr._outbox() == []
+
+    # moving, archiving and restoring go to the tracker's own routes
     state["mac_calls"] = []
     reg.dispatch("tracker_move_task", {"task_id": 4, "parent_id": 2})
     reg.dispatch("tracker_move_task", {"task_id": 4, "top_level": True})

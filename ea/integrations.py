@@ -63,7 +63,9 @@ def _local(url_attr: str, name: str) -> Callable[[config.Settings], tuple[str, s
         if router.via_bridge(url_attr.removesuffix("_url")):    # on a server: ask through the bridge on the Mac
             try:
                 with router.client(url_attr.removesuffix("_url")) as c:
-                    c.get("/", timeout=5)
+                    r = c.get("/", timeout=5)
+                if r.status_code == 401 or r.status_code >= 500:       # the bridge answered, the thing behind it did not
+                    return "missing", f"{name} not answering through the Mac bridge (HTTP {r.status_code}); it must be running on the Mac"
                 return "ok", f"{name} answering through the Mac bridge"
             except (httpx.HTTPError, SourceError) as e:
                 return "missing", f"{name} not reachable through the Mac bridge ({type(e).__name__}); the Mac must be awake with it running"

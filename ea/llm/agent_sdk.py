@@ -346,6 +346,13 @@ class AgentSDKRunner:
             system_text += ("\n\n# RECENT CONVERSATION (recap; your session was restarted because your standing "
                             "instructions changed)\n" + self._recap())
         self.convo.set(sig_key, sig)
+        if not resume and not recapped and self.convo.has_rows_before(self._thread, before):
+            # A new session on a thread that already has a conversation: the background lane created after the chat
+            # lane, or a session dropped as stale. It used to start blank and then mark everything as seen, so
+            # heartbeats and checks never learned what had been said on the thread (found 2026-11-20).
+            log.info("agent sdk: new %s session on a thread with history; starting it with a recap", self._lane)
+            recapped = True
+            system_text += "\n\n# RECENT CONVERSATION (recap; this session is new and has not seen the conversation so far)\n" + self._recap()
         # What this lane has not seen: the other lane's turns, and any turns that ran over the API meanwhile.
         seen = self.convo.get(seen_key)
         caught_up = ""

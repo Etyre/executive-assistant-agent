@@ -20,6 +20,7 @@ import zipfile
 from typing import Any, Iterable
 
 from .. import config
+from ..sqlite_locked import LockedConnection
 
 log = logging.getLogger(__name__)
 
@@ -122,8 +123,9 @@ class Roam:
         self.s = settings or config.load()
         self.folder = pathlib.Path(folder or self.s.data_dir / "roam")
         self.db_path = pathlib.Path(db_path or self.s.data_dir / "roam.db")
-        self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # Shared by the agent, its workers and the scheduler: see sqlite_locked. A search during a rebuild waits for it.
+        self._conn = LockedConnection(self.db_path)
+        self._lock = self._conn.lock
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()

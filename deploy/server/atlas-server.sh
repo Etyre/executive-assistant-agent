@@ -26,7 +26,9 @@ SESSIONS_SRV="$ROOT/data/home/.claude/projects/-data"
 COMPOSE="docker compose -f $ROOT/app/deploy/docker-compose.yml"
 # State that is copied between the two machines. Secrets (.env), the server's home folder and the document copies
 # are handled separately; logs stay where they were written.
-DATA_EXCLUDES=(--exclude=.env --exclude=server.env --exclude=home/ --exclude=docs/ --exclude=logs/ --exclude='*.log')
+# food_orders.jsonl and food/ are written on the Mac by the bridge even while the agent lives on the server: copying
+# the server's stale ones back with --delete would erase the record of today's order.
+DATA_EXCLUDES=(--exclude=.env --exclude=server.env --exclude=home/ --exclude=docs/ --exclude=logs/ --exclude='*.log' --exclude=food_orders.jsonl --exclude=food/ --exclude=.backup/)
 
 say() { printf '\n== %s\n' "$*"; }
 die() { echo "atlas-server: $*" >&2; exit 1; }

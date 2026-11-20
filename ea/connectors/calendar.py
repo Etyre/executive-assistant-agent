@@ -111,7 +111,10 @@ class Calendar:
             r = httpx.get(url, headers={"User-Agent": "executive-assistant"}, follow_redirects=True, timeout=30)
             r.raise_for_status()
         except httpx.HTTPError as e:
-            if hit:
+            if hit:                                     # an old copy beats nothing, but the reader is told how old it is
+                self.last_errors = getattr(self, "last_errors", [])
+                self.last_errors.append(f"calendar feed unreachable ({type(e).__name__}); showing the copy fetched at "
+                                        f"{dt.datetime.fromtimestamp(hit[0]):%Y-%m-%d %H:%M}")
                 return hit[1]
             raise SourceError(f"calendar fetch failed: {e}") from e
         self._cache[url] = (time.time(), r.content)
@@ -147,13 +150,20 @@ class Calendar:
                 continue
             # which calendar: the feed's own name (Google sets X-WR-CALNAME), else "calendar 1", "calendar 2", ...
             calname = str(cal.get("X-WR-CALNAME", "") or "").strip() or f"calendar {i + 1}"
-            for ev in recurring_ical_events.of(cal).between(start, end):
+            # Asked for a day on each side and then kept by LOCAL time. The library reads bare dates in each event's own
+            # zone, and Google writes one-off events in UTC, so `between(start, end)` returned the UTC day: an event
+            # at 19:00 Pacific was missing from its own day and listed under the next one's query (found 2026-11-20).
+            first, last = dt.datetime.combine(start, dt.time.min, local_tz), dt.datetime.combine(end, dt.time.min, local_tz)
+            for ev in recurring_ical_events.of(cal).between(start - dt.timedelta(days=1), end + dt.timedelta(days=1)):
                 if str(ev.get("STATUS", "")).upper() == "CANCELLED":
                     continue
                 s_ = ev.get("DTSTART").dt
                 e_ = ev.get("DTEND").dt if ev.get("DTEND") else s_
                 all_day = not isinstance(s_, dt.datetime)
                 if all_day:
+                    last_day = e_ if isinstance(e_, dt.date) and not isinstance(e_, dt.datetime) and e_ > s_ else s_ + dt.timedelta(days=1)
+                    if not (s_ < end and last_day > start):         # DTEND of an all-day event is the day after its last
+                        continue
                     out.append({"date": s_.isoformat(), "title": str(ev.get("SUMMARY", "")).strip() or "(busy)", "all_day": True,
                                 "calendar": calname, "event_id": str(ev.get("UID", "") or ""), "start": None, "end": None, "location": str(ev.get("LOCATION", "") or ""),
                                 "description": str(ev.get("DESCRIPTION", "") or "")[:300]})
@@ -163,6 +173,8 @@ class Calendar:
                 if isinstance(e_, dt.datetime) and e_.tzinfo is None:
                     e_ = e_.replace(tzinfo=local_tz)
                 s_l, e_l = s_.astimezone(local_tz), e_.astimezone(local_tz)
+                if not (s_l < last and (e_l > first or s_l >= first)):     # starts in the range, or began earlier and is still running in it
+                    continue
                 out.append({"date": s_l.date().isoformat(), "title": str(ev.get("SUMMARY", "")).strip() or "(busy)", "all_day": False,
                             "calendar": calname, "event_id": str(ev.get("UID", "") or ""), "start": s_l.strftime("%H:%M"), "end": e_l.strftime("%H:%M"),
                             "busy": str(ev.get("TRANSP", "OPAQUE")).upper() != "TRANSPARENT",
