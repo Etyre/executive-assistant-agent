@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import datetime as dt
 import pathlib
+import functools
 import re
 import sqlite3
+import threading
 from typing import Any
 
 import yaml
@@ -41,6 +43,17 @@ def _today() -> str:
     return dt.date.today().isoformat()
 
 
+def _locked(fn):
+    """One SQLite connection and one folder, used by the main agent, its workers and the web server's threads at
+    once. Without this, overlapping calls failed with "bad parameter or other API misuse" (found 2026-11-20; the
+    same fault as the workspace store's on 11-12)."""
+    @functools.wraps(fn)
+    def run(self, *a, **k):
+        with self._lock:
+            return fn(self, *a, **k)
+    return run
+
+
 class Memory(dict):
     """name, title, created, sources, edits, tags, body, path."""
 
@@ -51,6 +64,7 @@ class MemoryStore:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "_archive").mkdir(exist_ok=True)
         self.index_path = index_path or self.dir / ".index.sqlite"
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.index_path, check_same_thread=False)
         self._conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(name UNINDEXED, title, tags, body)")
         self._conn.commit()
@@ -58,6 +72,9 @@ class MemoryStore:
 
     # ------------------------------------------------------------------ files
     def _path(self, name: str) -> pathlib.Path:
+        # A name is a file name in this folder and nothing else: "../workspace/x" used to read and write outside it.
+        if not isinstance(name, str) or not name.strip() or name.startswith(".") or any(c in name for c in "/\\\0"):
+            raise ValueError(f"not a memory name: {name!r} (names are plain, like 'project-notes')")
         return self.dir / f"{name}.md"
 
     @staticmethod
@@ -96,6 +113,7 @@ class MemoryStore:
                            (mem["name"], mem["title"], " ".join(mem["tags"]), mem["body"]))
         self._conn.commit()
 
+    @_locked
     def reindex(self) -> int:
         self._conn.execute("DELETE FROM mem")
         n = 0
@@ -108,18 +126,21 @@ class MemoryStore:
         return n
 
     # ------------------------------------------------------------------ API
+    @_locked
     def list(self) -> list[Memory]:
         out = []
         for p in sorted(self.dir.glob("*.md")):
             out.append(self.parse(p.read_text(), p.stem, p))
         return out
 
+    @_locked
     def read(self, name: str) -> Memory | None:
         p = self._path(name)
         if not p.exists():
             return None
         return self.parse(p.read_text(), name, p)
 
+    @_locked
     def write(self, title: str, body: str, tags: list[str] | None = None, source_date: str | None = None,
               channel: str = "", name: str | None = None) -> Memory:
         """Create a memory. If `name` (or the slug of `title`) already exists, this becomes an update."""
@@ -132,6 +153,7 @@ class MemoryStore:
         self._save(mem)
         return mem
 
+    @_locked
     def update(self, name: str, body: str | None = None, append: str | None = None, tags: list[str] | None = None,
                source_date: str | None = None, channel: str = "", title: str | None = None) -> Memory:
         """Change a memory, keeping every earlier source and edit date and adding today's."""
@@ -154,15 +176,20 @@ class MemoryStore:
         self._save(mem)
         return mem
 
+    @_locked
     def archive(self, name: str) -> bool:
         p = self._path(name)
         if not p.exists():
             return False
-        p.rename(self.dir / "_archive" / f"{name}.{_today()}.md")
+        target = self.dir / "_archive" / f"{name}.{_today()}.md"
+        if target.exists():              # archived once already today: keep both ("never deleted"), the later one timed
+            target = self.dir / "_archive" / f"{name}.{_today()}-{dt.datetime.now():%H%M%S%f}.md"
+        p.rename(target)
         self._conn.execute("DELETE FROM mem WHERE name=?", (name,))
         self._conn.commit()
         return True
 
+    @_locked
     def archived(self) -> list[dict[str, Any]]:
         """Archived memories, newest first: name, archived_on, title, file. A name archived on several days is listed once per day."""
         out = []
@@ -172,6 +199,7 @@ class MemoryStore:
                 out.append({"name": name, "archived_on": day, "title": self.parse(p.read_text(), name)["title"], "file": p.name})
         return sorted(out, key=lambda a: (a["archived_on"], a["name"]), reverse=True)
 
+    @_locked
     def restore(self, name: str, archived_on: str | None = None) -> Memory | None:
         """Bring an archived memory back into the active set (the latest archived copy unless a day is given).
         Raises ValueError when an active memory already has that name: nothing is ever overwritten."""
@@ -185,6 +213,7 @@ class MemoryStore:
         self._index_one(mem)
         return mem
 
+    @_locked
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         """Full-text search; falls back to a prefix/OR query when the raw query is not valid FTS syntax."""
         q = query.strip()
@@ -201,6 +230,7 @@ class MemoryStore:
                 continue
         return [{"name": r[0], "title": r[1], "snippet": r[2], "score": round(r[3], 3)} for r in rows]
 
+    @_locked
     def digest(self, max_chars: int = 6000) -> str:
         """A compact table of contents for the system prompt: name, title, tags, last edit."""
         lines = []

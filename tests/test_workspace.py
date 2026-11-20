@@ -122,6 +122,9 @@ def test_documents_store_and_endpoints(monkeypatch):
     assert docs.whiteboard().read()["text"] == "# old single file\n" and not (d / "workspace.md").exists()
     plan = docs.get("DC trip plan", default="# DC trip\n\n```mermaid\ngantt\n  title Trip\n```\n")
     assert [x["name"] for x in docs.names()] == ["workspace", "DC trip plan"] and docs.names()[1]["title"] == "DC trip"
+    (d / "workspace" / "Eli's notes (v2).md").write_text("# by hand\n"); (d / "workspace" / ".hidden.md").write_text("x")
+    assert [x["name"] for x in docs.names()] == ["workspace", "DC trip plan"]      # unusable names are left out, not fatal
+    (d / "workspace" / "Eli's notes (v2).md").unlink(); (d / "workspace" / ".hidden.md").unlink()
     plan.append("- book flights", by="agent")
     assert plan.history()[0]["by"] == "agent" and docs.whiteboard().history()[0]["by"] == "system"   # histories are per document
     try:

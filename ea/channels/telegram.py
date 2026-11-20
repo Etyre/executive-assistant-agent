@@ -58,14 +58,29 @@ class Telegram:
         if self.agent.outbound is None:            # normally __main__ wires a fan-out (push + events + telegram)
             self.agent.outbound = self.send_sync
         offset = None
-        me = await self.http.get("/getMe")
-        log.info("Telegram bot @%s polling; allowed users: %s", me.json().get("result", {}).get("username"), sorted(self.allowed) or "NONE (set channels.telegram_allowed_user_ids)")
+        try:                                       # a failure here used to end run(), and with it the web server beside it
+            me = await self.http.get("/getMe")
+            log.info("Telegram bot @%s polling; allowed users: %s", me.json().get("result", {}).get("username"), sorted(self.allowed) or "NONE (set channels.telegram_allowed_user_ids)")
+        except (httpx.HTTPError, ValueError) as e:
+            log.warning("telegram getMe failed (%s); polling anyway", e)
+        tasks: set[asyncio.Task] = set()           # keep a reference: an unreferenced task can be collected mid-run
+
+        def done(t: asyncio.Task) -> None:
+            tasks.discard(t)
+            if not t.cancelled() and t.exception():
+                log.error("telegram message failed", exc_info=t.exception())
         while True:
             try:
                 r = await self.http.get("/getUpdates", params={"timeout": 60, "offset": offset, "allowed_updates": '["message"]'})
-                for upd in r.json().get("result", []):
+                data = r.json()
+                if r.status_code != 200 or not data.get("ok", True):       # 409 (another poller), 401, 429: answered at once,
+                    log.warning("telegram poll refused: %s %s", r.status_code, str(data)[:200])   # so without a pause this spun
+                    await asyncio.sleep(15)
+                    continue
+                for upd in data.get("result", []):
                     offset = upd["update_id"] + 1
-                    asyncio.create_task(self._handle(upd.get("message") or {}))
+                    t = asyncio.create_task(self._handle(upd.get("message") or {}))
+                    tasks.add(t); t.add_done_callback(done)
             except (httpx.HTTPError, ValueError) as e:
                 log.warning("telegram poll error: %s", e)
                 await asyncio.sleep(5)

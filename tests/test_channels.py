@@ -74,6 +74,10 @@ def test_message_endpoint_requires_token(monkeypatch):
     start = {"From": "+15550001111", "To": "+15559999999", "CallSid": "CA1"}
     r = c.post("/twilio/voice", data=start, headers={"X-Twilio-Signature": _sign("twtok", "https://ea.example.com/twilio/voice", start)})
     assert r.status_code == 200 and "Go ahead" in r.text
+    # A call the agent placed: Twilio's own number is From and the user is To, on every request of the call.
+    out = {"From": "+15559999999", "To": "+15550001111", "SpeechResult": "go on", "CallSid": "CA2"}
+    r = c.post("/twilio/gather", data=out, headers={"X-Twilio-Signature": _sign("twtok", "https://ea.example.com/twilio/gather", out)})
+    assert r.status_code == 200 and "<Gather" in r.text
 
 
 def test_telegram_chunking():

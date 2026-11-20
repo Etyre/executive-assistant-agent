@@ -560,8 +560,11 @@ def create_app(agent: Agent, settings: config.Settings | None = None, push: Push
             url = ch.public_base_url.rstrip("/") + request.url.path + (f"?{request.url.query}" if request.url.query else "")
         if not twilio_voice.valid_signature(twilio_token, url, form, request.headers.get("X-Twilio-Signature")):
             raise HTTPException(403, "bad Twilio signature")
-        caller = form.get("From") if not request.query_params.get("outbound") else form.get("To")
-        if ch.twilio_allowed_callers and caller not in ch.twilio_allowed_callers:
+        # The user is From on a call they place and To on one the agent places. Only the first request of an
+        # outbound call carries ?outbound, so the later ones (each thing the user says) were refused and the call
+        # died after the greeting (found 2026-11-20). The signature above already proves the request is Twilio's.
+        caller = form.get("From")
+        if ch.twilio_allowed_callers and not ({form.get("From"), form.get("To")} & set(ch.twilio_allowed_callers)):
             log.warning("rejected call from %s", caller)
             raise HTTPException(403, "caller not allowed")
         return form

@@ -84,3 +84,42 @@ def test_restore_is_the_opposite_of_archive(tmp_path):
     s.archive("carpet"); s.write("Carpet", "a newer note", name="carpet")
     assert "already exists" in reg.dispatch("memory_restore", {"name": "carpet"})[0]
     assert s.read("carpet")["body"] == "a newer note" and len(s.archived()) == 1
+
+
+def test_a_name_cannot_reach_outside_the_memory_folder(tmp_path):
+    import pytest
+    (tmp_path / "outside.md").write_text("private")
+    s = MemoryStore(tmp_path / "memory")
+    for bad in ("../outside", "a/b", ".hidden", "", "..\\x"):
+        with pytest.raises(ValueError):
+            s.read(bad)
+        with pytest.raises(ValueError):
+            s.write("t", "b", name=bad)
+    assert not (tmp_path / "x.md").exists() and (tmp_path / "outside.md").read_text() == "private"
+
+
+def test_archiving_the_same_name_twice_in_a_day_keeps_both(tmp_path):
+    s = MemoryStore(tmp_path)
+    s.write("Note", "first body", name="note"); s.archive("note")
+    s.write("Note", "second body", name="note"); s.archive("note")
+    bodies = sorted(p.read_text().split("---\n")[-1].strip() for p in (tmp_path / "_archive").glob("note.*.md"))
+    assert bodies == ["first body", "second body"]
+    assert len([a for a in s.archived() if a["name"] == "note"]) == 2
+    assert s.restore("note")["body"] == "second body"          # the latest copy comes back
+
+
+def test_many_threads_at_once_do_not_break_the_index(tmp_path):
+    import threading
+    s = MemoryStore(tmp_path)
+    s.write("Alpha", "alpha body words", name="alpha")
+    errors = []
+
+    def work(i):
+        try:
+            for n in range(60):
+                s.search("alpha"); s.update("alpha", append=f"line {i}-{n}") if i == 0 else s.digest()
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+    ts = [threading.Thread(target=work, args=(i,)) for i in range(4)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert errors == []

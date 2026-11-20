@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 HOSTS = {"production": "https://api.push.apple.com", "sandbox": "https://api.sandbox.push.apple.com"}
 JWT_TTL = 50 * 60                 # Apple: refresh at least hourly, not more than every 20 min
 LABELLED_LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
+KEEP_UNDELIVERED_S = 24 * 3600
+MAX_PAYLOAD_BYTES = 3900          # Apple refuses more than 4096 bytes of JSON (413), and the notification is lost
 MAX_BODY = 3000                   # APNs payload limit is 4 KB; the app fetches the full text from /api/history
 UNREGISTER_REASONS = {"Unregistered", "BadDeviceToken", "DeviceTokenNotForTopic"}
 
@@ -83,7 +85,8 @@ class Devices:
         return self.get(token)
 
     def get(self, token: str) -> dict[str, Any] | None:
-        r = self._conn.execute("SELECT * FROM devices WHERE token=?", (token.strip().lower(),)).fetchone()
+        with self._lock:                 # one connection, several threads: unlocked reads failed under overlap (2026-11-20)
+            r = self._conn.execute("SELECT * FROM devices WHERE token=?", (token.strip().lower(),)).fetchone()
         return dict(r) if r else None
 
     def remove(self, token: str) -> bool:
@@ -93,7 +96,9 @@ class Devices:
         return n > 0
 
     def all(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._conn.execute("SELECT * FROM devices ORDER BY added_ts").fetchall()]
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM devices ORDER BY added_ts").fetchall()
+        return [dict(r) for r in rows]
 
 
 class APNs:
@@ -121,7 +126,10 @@ class APNs:
     def send(self, device_token: str, payload: dict[str, Any], env: str = "production", collapse_id: str | None = None,
              push_type: str = "alert", priority: int = 10) -> tuple[int, str]:
         """Returns (status, reason). 200 means delivered to Apple. Retries once on an expired provider token."""
-        headers = {"apns-topic": self.bundle_id, "apns-push-type": push_type, "apns-priority": str(priority), "apns-expiration": "0"}
+        headers = {"apns-topic": self.bundle_id, "apns-push-type": push_type, "apns-priority": str(priority),
+                   # Apple keeps the newest undelivered notification until this time. With 0 it tried once, so a
+                   # reminder sent while the phone had no signal was never shown (found 2026-11-20).
+                   "apns-expiration": str(int(time.time()) + KEEP_UNDELIVERED_S)}
         if collapse_id:
             headers["apns-collapse-id"] = collapse_id[:64]
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -182,7 +190,12 @@ class Push:
         aps: dict[str, Any] = {"alert": {"title": title or self.s.agent_name, "body": body}, "sound": "default", "thread-id": "chat"}
         if self.s.channels.apns_interruption_level:
             aps["interruption-level"] = self.s.channels.apns_interruption_level
-        return {"aps": aps, "kind": kind, "ts": time.time()}
+        out = {"aps": aps, "kind": kind, "ts": time.time()}
+        # The limit is bytes of JSON, not characters: 3000 characters of accents, quotes or newlines are over it.
+        while len(json.dumps(out, ensure_ascii=False).encode()) > MAX_PAYLOAD_BYTES and len(body) > 1:
+            body = body[:max(1, int(len(body) * 0.85)) - 1].rstrip("…") + "…"
+            aps["alert"]["body"] = body
+        return out
 
     def send(self, text: str, only: list[str] | None = None, exclude: list[str] | None = None, title: str | None = None,
              kind: str = "message", collapse_id: str | None = None) -> list[dict[str, Any]]:

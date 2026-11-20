@@ -149,6 +149,10 @@ def register(reg: ToolRegistry, store: ConversationStore, settings: config.Setti
                               "contains": {"type": "string", "description": "only lines containing this text (case-insensitive)"}},
                "required": ["date"]})
     def read_transcript(date: str, contains: str | None = None) -> Any:
+        try:
+            date = dt.date.fromisoformat(str(date).strip()).isoformat()      # a date and nothing else: it becomes a file name
+        except ValueError:
+            return f"'{date}' is not a date (YYYY-MM-DD); available: {store.recent_days(14)}"
         p = settings.transcripts_dir / f"{date}.jsonl"
         if not p.exists():
             return f"no transcript for {date}; available: {store.recent_days(14)}"

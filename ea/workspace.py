@@ -179,7 +179,10 @@ class Documents:
     def names(self) -> list[dict[str, Any]]:
         out = []
         for p in sorted(self.folder.glob("*.md"), key=lambda p: (p.stem != WHITEBOARD, p.stem.lower())):
-            d = self.get(p.stem).read()
+            try:
+                d = self.get(p.stem).read()
+            except ValueError:           # a file put there by hand whose name the app cannot use ("Eli's notes.md",
+                continue                 # a dotfile): leave it out instead of failing the whole list (2026-11-20)
             out.append({"name": p.stem, "chars": d["chars"], "updated_at": d["updated_at"], "updated_by": d["updated_by"],
                         "title": next((ln.lstrip("# ").strip() for ln in d["text"].splitlines() if ln.startswith("#")), p.stem),
                         "whiteboard": p.stem == WHITEBOARD})

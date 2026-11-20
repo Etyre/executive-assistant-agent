@@ -141,6 +141,20 @@ def test_long_text_truncated_in_alert():
     assert link["aps"]["alert"]["body"] == "Butter chicken · Indigo"        # a notification shows the label, not the address
 
 
+def test_the_alert_fits_apples_limit_in_bytes_and_is_kept_for_a_day():
+    import json, time
+    config.load.cache_clear()
+    apple = FakeApple()
+    p = _push(config.load(), apple)
+    for text in ("é" * 3000, '"quoted"\n' * 400, "日本語" * 1000):
+        payload = p.payload(text)
+        assert len(json.dumps(payload, ensure_ascii=False).encode()) <= 4096 and payload["aps"]["alert"]["body"].endswith("…")
+    p.devices.register("ab" * 32, "ios", "phone")
+    p.send("reminder while the phone is in a tunnel")
+    expires = int(apple.calls[-1].headers["apns-expiration"])
+    assert time.time() + 23 * 3600 < expires < time.time() + 25 * 3600        # 0 meant "try once, then drop"
+
+
 def test_device_endpoints_and_turn_pushes_reply_to_asking_device(monkeypatch):
     monkeypatch.setenv("EA_WEB_TOKEN", "secret-token")
     config.load.cache_clear()
