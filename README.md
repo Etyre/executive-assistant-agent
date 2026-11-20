@@ -338,7 +338,7 @@ words and everything else carries on.
 | `instructions/` | `STANDING_INSTRUCTIONS.md`, `USER_SYSTEM_PROMPT.md`, `MEMORY_CONVENTIONS.md`, `habits/*.md` (one file per habit + README and example) |
 | `apps/Atlas/` | SwiftUI iPhone + Mac apps (`project.yml` → xcodegen; `build.sh` builds, signs, installs into /Applications and relaunches the Mac app; own README) |
 | `apps/Atlas/auto_deploy.py`, `install-auto-deploy.sh` | launchd agent `com.elityre.atlas-app-deploy`: builds each new commit of the Mac app and installs it in /Applications once the agent is not mid-turn |
-| `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: what the Mac does for an agent running on a server (the three local services, document folders, opening the tracker, receiving LLM-inbox records), on the Tailscale address only |
+| `bridge/` | `mac_bridge.py` + `com.elityre.ea-bridge.plist` + `install_bridge.sh`: what the Mac does for an agent running on a server (the three local services, document folders, opening the tracker, receiving LLM-inbox records), on the Tailscale address only. `backup_server.py` + `com.elityre.ea-backup.plist` + `install_backup.sh`: the copy of the server's conversations and memory kept on this Mac |
 | `ea/food.py`, `ea/connectors/site_browser.py`, `ea/tools/food_tools.py`, `bridge/food_signin.py` | Food ordering: the limits and the order record; the signed-in browser; the agent's tools; the window Eli signs in through |
 | `ea/inbox_relay.py`, `ea/docs_mirror.py` | Server deployment only: copy LLM-inbox records to the Mac, and the Mac's document folders to the server, both through the bridge |
 | `deploy/` | `Dockerfile`, `docker-compose.yml`, `server/` (`atlas-server.sh`: provision, deploy, move the agent to a server and back; own README; `config.server.example.toml`), `macmini/` (launchd plist + `install.sh`), `calendar_script/` (`Code.gs` + manifest: the Google Apps Script that gives the agent calendar write access; setup steps at the top of `Code.gs`), `sheet_reader_script/` (the read-only script bound to each Google Sheet the agent may read) |
@@ -356,6 +356,13 @@ words and everything else carries on.
 - **Config**: `config.toml` in the repo (`EA_CONFIG` overrides); prompts in `instructions/`.
 - **Secrets**: `data/.env` (mode 600) or the environment.
 - **State**: `data/` (`EA_DATA` overrides): memory, transcripts, `state.db`, `otter.db`, `roam.db`, workspace, images.
+- **Backup of the server's state on the Mac** (2026-11-20): `~/Library/Application Support/Atlas/server-backup/snapshots/YYYY-MM-DD/`,
+  one folder per day for 30 days (unchanged files are hard links, so a day costs about 30 MB), made at login and every
+  six hours by the launchd agent `com.elityre.ea-backup`. It holds the transcripts, memory, workspace, images, a
+  consistent snapshot of `state.db` (in `.backup/`), the CLI's session files and the LLM inbox; not the Roam and Otter
+  indexes (rebuilt from their sources) and no secrets. `last_ok.json` beside the snapshots names the last backup that
+  passed its checks; log `~/Library/Logs/ea-backup.log`. To restore: stop the agent, copy a snapshot's folders back
+  into `/opt/atlas/data` (the `state.db` from `.backup/`), owned by user 1000, and start it.
 - **Mac app auto-deploy**: agent `~/Library/LaunchAgents/com.elityre.atlas-app-deploy.plist`; state (last installed
   source id) and the clean build folder in `~/Library/Application Support/AtlasAppDeploy/`; log
   `~/Library/Logs/atlas-app-deploy.log`.

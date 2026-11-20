@@ -50,6 +50,13 @@ Mac is shut. Everything is driven from the Mac with one script, `deploy/server/a
   page on :8798 show it with its full context.
 - **The agent's conversation** moves with it: `state.db`, memory, transcripts, and the Claude CLI's session files
   (`~/.claude/projects/<data folder>` on the Mac, `/opt/atlas/data/home/.claude/projects/-data` on the server).
+- **The conversations are backed up to the Mac** (2026-11-20). `bridge/backup_server.py`, run by the launchd agent
+  `com.elityre.ea-backup` at login and every six hours, has the server write a clean snapshot of `state.db` and then
+  copies it with the transcripts, memory, workspace, images, session files and LLM inbox into
+  `~/Library/Application Support/Atlas/server-backup/snapshots/<date>/` over ssh (Tailscale, so it also works
+  during the night block). Each run checks the copied database and records the result in `last_ok.json`; `status`
+  shows its age and says OVERDUE after 30 hours. It only reads the server. With the agent moved back to the Mac
+  the job finds nothing new: the live state is then `data/` here.
 - **Only one copy runs.** `cutover` stops the Mac's agent (and disables its launchd job) before the server's
   starts; `back-to-mac` does the reverse. Two copies would both send check-ins and both read new recordings.
 - **Code** reaches the server only as a commit: `deploy` exports HEAD, adds `agent-coding/shared`, and builds.
@@ -66,7 +73,7 @@ Mac is shut. Everything is driven from the Mac with one script, `deploy/server/a
 | `sync-tracker-copy.sh`, `follow-mac-timezone.sh` | Run by cron on the server (installed by `provision`): refresh the tracker's read-only copy; keep the moved tools in the Mac's time zone |
 | `config.server.example.toml` | Template for `config.server.toml`: the bridge address, where the document copies are |
 | `../Dockerfile`, `../docker-compose.yml` | The image and how it is run |
-| `../../bridge/` | The Mac side: `mac_bridge.py`, its launchd plist, `install_bridge.sh` |
+| `../../bridge/` | The Mac side: `mac_bridge.py`, its launchd plist, `install_bridge.sh`; `backup_server.py`, its plist, `install_backup.sh` |
 
 ## Runtime locations
 
@@ -76,7 +83,8 @@ agent's home folder (sessions, LLM inbox, the Roam deploy key) in `/opt/atlas/da
 (20 MB × 5 kept).
 
 On the Mac: server-only secrets in `data/server.env`; the bridge token in `data/.env` (`EA_BRIDGE_TOKEN`); the
-bridge's log in `~/Library/Logs/ea-bridge.log`.
+bridge's log in `~/Library/Logs/ea-bridge.log`; the backups of the server in
+`~/Library/Application Support/Atlas/server-backup/`, their log in `~/Library/Logs/ea-backup.log`.
 
 ## Setting it up
 
@@ -111,11 +119,18 @@ deploy/server/atlas-server.sh logs              # follow the agent's log
 deploy/server/atlas-server.sh check             # every integration, as seen from the server
 deploy/server/atlas-server.sh back-to-mac --yes # bring the agent home
 bridge/install_bridge.sh                        # (re)install the Mac bridge;  tail -f ~/Library/Logs/ea-bridge.log
+bridge/install_backup.sh                        # (re)install the six-hourly backup of the server onto this Mac
+.venv/bin/python bridge/backup_server.py        # back up now;  --status says when the last good one was
 # Try the image on the Mac without a server (scratch state, another port):
 docker build -f deploy/Dockerfile -t atlas-agent <a staged copy: see `deploy` in atlas-server.sh>
 ```
 
 ## Gotchas learned
+
+- **Never copy the live `state.db` as a file**: a copy taken mid-write can be unreadable. The backup asks SQLite
+  inside the container for a snapshot (`/opt/atlas/data/.backup/state.db`) and copies that.
+- **The Mac's `rsync` is openrsync** (protocol 29): `--link-dest` works, the `***` filter pattern is not relied on,
+  so the backup makes one plain copy per folder instead of one filtered copy.
 
 - **Simulating a sleeping Mac** without closing the laptop: inside the container, point `sources.bridge_url` at a
   Tailscale address nobody answers on and call the connector (done 2026-11-17; a real overnight sleep has not

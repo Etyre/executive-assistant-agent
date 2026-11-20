@@ -227,6 +227,7 @@ status)
   echo "  disk:   $(r "df -h $ROOT | tail -1 | awk '{print \$4 \" free of \" \$2}'")"
   echo "this Mac: $(mac_health | grep -q '"ok"' && echo "the agent is running here" || echo "the agent is not running here")"
   echo "  bridge: $(launchctl print "$DOMAIN/com.elityre.ea-bridge" 2>/dev/null | grep -m1 'state =' | xargs || echo "not installed")"
+  echo "  backup of the server on this Mac: $("$REPO/.venv/bin/python" "$REPO/bridge/backup_server.py" --status 2>&1)"
   ;;
 
 logs) ssh -t "$SERVER" "$SUDO docker logs -f --tail ${1:-200} atlas" ;;

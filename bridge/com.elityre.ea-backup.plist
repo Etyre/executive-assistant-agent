@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.elityre.ea-backup</string>
+  <key>ProgramArguments</key><array>
+    <string>__REPO__/.venv/bin/python</string>
+    <string>__REPO__/bridge/backup_server.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <!-- A job that runs and exits, so no KeepAlive: at login, then every six hours (a missed run fires on wake). -->
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>21600</integer>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/ea-backup.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ea-backup.log</string>
+</dict></plist>

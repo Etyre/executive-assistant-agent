@@ -417,3 +417,9 @@ Agreed with Eli: Claude Code drives his Chrome to paste `deploy/sheet_reader_scr
 deployments; Eli pastes the token into Script Properties (`SHEET_TOKEN`) and clicks Allow on Google's permission
 screen. Then: add the two `/exec` URLs to `READ_SHEETS` in `data/.env`, `atlas-server.sh env`, `deploy`, and read
 rows from both through Atlas's tools.
+
+**Backups (2026-11-20, Eli: "we should be saving it and backing it up, including locally"):** done for the local
+half. The launchd agent `com.elityre.ea-backup` copies the server's conversations, memory and session files to
+`~/Library/Application Support/Atlas/server-backup/` every six hours, 30 daily snapshots (first run verified under
+launchd: 12,005 messages, transcripts 11-04 to 11-19). **Eli:** check that DigitalOcean's automatic backups are on
+for the droplet (its Backups tab); that cannot be seen from inside the server. Not tested: restoring from a snapshot.
