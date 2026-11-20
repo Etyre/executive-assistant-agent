@@ -381,8 +381,9 @@ saved sessions were copied; push is configured there. The Mac's launchd job is d
 reverses it. The Mac app points at the server; the iPhone app points at it too (set 2026-11-17 over the cable with
 `devicectl ... launch --payload-url 'atlas://setup?url=...'`; it connected and sent a queued message). Eli chose to
 keep Tailscale as the phone's way in (no public address for now); his two steps for "always works": turn on VPN On
-Demand in the phone's Tailscale app, and disable key expiry for `atlas` and the phone in the Tailscale admin
-console (keys otherwise expire May 2027).
+Demand in the phone's Tailscale app (still open), and disable key expiry in the Tailscale admin console. Key
+expiry was disabled for `atlas` and the MacBook Pro on 2026-11-19 (confirmed with `tailscale status --json` on the
+server); the phone's key still expires 2027-05-11, left that way on purpose, since signing in again there is quick.
 
 **Open after the move:**
 - The night block (00:00-06:00) refuses Tailscale addresses from the Mac, so the Mac app cannot reach the agent
