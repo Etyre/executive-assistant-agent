@@ -36,6 +36,7 @@ def test_rows_carry_what_callers_ask_a_cursor_for(tmp_path):
     c.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
     r = c.execute("INSERT INTO t (v) VALUES (?)", ("a",))
     assert r.lastrowid == 1 and r.rowcount == 1 and r.fetchone() is None
+    c.commit()
     try:
         with c:
             c.execute("INSERT INTO t (v) VALUES ('b')")
