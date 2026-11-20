@@ -558,7 +558,8 @@ final class ChatStore {
         #endif
         let c = UNMutableNotificationContent()
         c.title = agentName
-        c.body = m.text.count > 400 ? String(m.text.prefix(399)) + "…" : m.text
+        let body = Linkified.plain(m.text)
+        c.body = body.count > 400 ? String(body.prefix(399)) + "…" : body
         c.sound = .default
         c.threadIdentifier = "chat"
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: m.id, content: c, trigger: nil)) { err in

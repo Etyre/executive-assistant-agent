@@ -137,6 +137,8 @@ def test_long_text_truncated_in_alert():
     p = _push(config.load(), FakeApple())
     body = p.payload("x" * 5000)["aps"]["alert"]["body"]
     assert len(body) == 3000 and body.endswith("…")
+    link = p.payload("[Butter chicken · Indigo](https://www.grubhub.com/restaurant/indigo/1532216/menu-item/2?x=1)")
+    assert link["aps"]["alert"]["body"] == "Butter chicken · Indigo"        # a notification shows the label, not the address
 
 
 def test_device_endpoints_and_turn_pushes_reply_to_asking_device(monkeypatch):

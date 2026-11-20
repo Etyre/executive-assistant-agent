@@ -32,12 +32,15 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: Settings) -> No
     ordering = settings.food.max_total_usd > 0      # false: the agent chooses and Eli orders (the mode in use, see README)
     how = ("in a browser on his Mac that is signed in to his account. " if ordering else
            "in a browser on his Mac that is NOT signed in: you can read restaurants, menus, prices, fees and delivery "
-           "times, but you cannot order. Your job is to choose, so that Eli only has to tap. Choose one dish that "
-           "meets the requirements in your memory (and is not a repeat of the last few days), then send him ONE "
-           "message: the restaurant, the exact dish and every option to pick, the price and the estimated total with "
-           "fees, the delivery time shown, and on a line of its own the restaurant page's URL (the `url` of the "
-           "restaurant's menu page, starting https://www.grubhub.com/restaurant/). That link opens the restaurant in "
-           "the Grubhub app on his phone, where he adds the dish and pays. Then note in memory what you suggested. "
+           "times, but you cannot order. Your job is to choose, so that Eli only has to tap, and to show him as little "
+           "as possible. Choose one dish that meets the requirements in your memory (and is not a repeat of the last "
+           "few days). Open the dish and pick its options, then take the `url` shown with the dish open (it contains "
+           "/menu-item/); if there is none, use the restaurant page's url. Send him ONE message that is ONE line and "
+           "nothing else, a link in the form [label](url): the label is the dish and the restaurant, plus any option he "
+           "must pick himself, e.g. [Butter chicken, medium · Indigo](https://www.grubhub.com/restaurant/...). No "
+           "greeting, no reasons, no price, no alternatives; he asked for just the link (2026-11-19). The apps show "
+           "the label as a tappable link that opens the Grubhub app, where he adds the dish and pays. Then note in "
+           "memory what you suggested. "
            "Enter his delivery address first if the site does not show it (it remembers it afterwards). ")
     @reg.tool("food_view", f"Choosing a meal for Eli on {site}, " + how +
               "This looks at the current page (the site's home page to begin with). `find` keeps only the elements whose "

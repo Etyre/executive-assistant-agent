@@ -212,9 +212,9 @@ finishes; a Chromium that died is relaunched on the next call.
 
 Built 2026-11-19 (Eli: a meal ordered every day without him thinking about it). **What runs today: the agent
 chooses, Eli orders.** The agent browses Grubhub's menus signed out, picks a dish that meets the requirements in
-its memory, and messages Eli the restaurant, the dish and options, the price, and the restaurant's link; the link
-opens that restaurant in the Grubhub app on his phone (web addresses in the apps' messages are tappable for this),
-where he adds the dish and pays. When the agent does this is its own daily wakeup (`schedule_wakeup` with
+its memory, and sends Eli one line and nothing else (he asked for just a link, 2026-11-19): `[dish · restaurant](url)`.
+The apps show the label as a tappable link (`Linkified` in `ChatView.swift`; a notification shows the label alone)
+that opens the restaurant in the Grubhub app on his phone, where he adds the dish and pays. When the agent does this is its own daily wakeup (`schedule_wakeup` with
 `every_minutes`), set when Eli tells it the time.
 
 Ordering by the agent itself was the goal and is built below, but **no site allows it**: Uber Eats answers an

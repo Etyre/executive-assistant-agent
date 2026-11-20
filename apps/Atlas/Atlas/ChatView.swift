@@ -237,24 +237,41 @@ private struct NavWrap: ViewModifier {
 }
 #endif
 
-/// Message text with its web addresses made tappable (2026-11-19: the agent sends a link that opens a restaurant in
-/// its app, and a plain `Text(String)` shows a URL as dead text). The text itself is shown exactly as written; only
-/// http(s) links are marked. Kept per text, since bubbles are redrawn often.
+/// Message text with its links made tappable (2026-11-19: the agent sends a link that opens a restaurant in its app,
+/// and a plain `Text(String)` shows a URL as dead text). Two forms are understood: a bare http(s) address, shown as
+/// written, and `[label](https://...)`, shown as the label alone so a message can be one short tappable line.
+/// Nothing else of Markdown is interpreted. Kept per text, since bubbles are redrawn often.
 enum Linkified {
     private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static let labelled = try? NSRegularExpression(pattern: #"\[([^\]\n]+)\]\((https?://[^\s)]+)\)"#)
     private static let cache: NSCache<NSString, NSAttributedString> = { let c = NSCache<NSString, NSAttributedString>(); c.countLimit = 400; return c }()
 
     static func text(_ s: String) -> AttributedString {
         if let hit = cache.object(forKey: s as NSString) { return AttributedString(hit) }
         let out = NSMutableAttributedString(string: s)
-        if s.contains("http"), let detector {
-            for m in detector.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length)) {
+        guard s.contains("http") else { cache.setObject(out, forKey: s as NSString); return AttributedString(out) }
+        if let labelled {                    // from the end, so earlier ranges stay valid as the text shrinks
+            for m in labelled.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length)).reversed() {
+                guard let url = URL(string: (s as NSString).substring(with: m.range(at: 2))) else { continue }
+                let label = NSAttributedString(string: (s as NSString).substring(with: m.range(at: 1)), attributes: [.link: url])
+                out.replaceCharacters(in: m.range, with: label)
+            }
+        }
+        if let detector {
+            let now = out.string
+            for m in detector.matches(in: now, range: NSRange(location: 0, length: (now as NSString).length)) {
                 guard let url = m.url, url.scheme == "https" || url.scheme == "http" else { continue }
-                out.addAttribute(.link, value: url, range: m.range)
+                if out.attribute(.link, at: m.range.location, effectiveRange: nil) == nil { out.addAttribute(.link, value: url, range: m.range) }
             }
         }
         cache.setObject(out, forKey: s as NSString)
         return AttributedString(out)
+    }
+
+    /// The same text for a notification, which cannot hold a link: `[label](url)` becomes the label.
+    static func plain(_ s: String) -> String {
+        guard s.contains("]("), let labelled else { return s }
+        return labelled.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length), withTemplate: "$1")
     }
 }
 

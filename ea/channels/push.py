@@ -14,6 +14,7 @@ import json
 import logging
 import pathlib
 import sqlite3
+import re
 import threading
 import time
 from typing import Any
@@ -26,6 +27,7 @@ log = logging.getLogger(__name__)
 
 HOSTS = {"production": "https://api.push.apple.com", "sandbox": "https://api.sandbox.push.apple.com"}
 JWT_TTL = 50 * 60                 # Apple: refresh at least hourly, not more than every 20 min
+LABELLED_LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
 MAX_BODY = 3000                   # APNs payload limit is 4 KB; the app fetches the full text from /api/history
 UNREGISTER_REASONS = {"Unregistered", "BadDeviceToken", "DeviceTokenNotForTopic"}
 
@@ -175,6 +177,7 @@ class Push:
         return f"configured ({self.s.channels.apns_bundle_id}); {n} device(s) registered" if self.enabled() else f"not configured ({self.reason_disabled}); {n} device(s) registered"
 
     def payload(self, text: str, title: str | None = None, kind: str = "message") -> dict[str, Any]:
+        text = LABELLED_LINK.sub(r"\1", text)      # a notification cannot hold a link: [label](url) is shown as the label
         body = text if len(text) <= MAX_BODY else text[:MAX_BODY - 1] + "…"
         aps: dict[str, Any] = {"alert": {"title": title or self.s.agent_name, "body": body}, "sound": "default", "thread-id": "chat"}
         if self.s.channels.apns_interruption_level:
