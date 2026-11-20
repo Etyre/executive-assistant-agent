@@ -470,9 +470,11 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   gained `GET /api/agent/summary`, `GET /api/oura/collection` and `oura.fetch_collection`). A running copy
   started before they were added needs a restart (quit and reopen the Task Tracker app;
   `launchctl kickstart -k gui/$(id -u)/com.elityre.sleep-bandit`).
-- Nightblock (00:00–06:00): localhost and the Anthropic API pass through; Toggl, Otter, Apple push and Twilio
-  hosts need `nightblock config-add direct_hosts` / `allow` (the command is in `NEXT_STEPS.md`);
-  `script.google.com` (exercise export) stays blocked overnight.
+- Nightblock (00:00–06:00) on the Mac: localhost, the Anthropic API, the whole Tailscale network (so the Atlas
+  app, `ssh atlas-server` and the bridge; since 2026-11-18) and Toggl (since 2026-11-19) pass through. Otter,
+  Apple push and Twilio hosts are still blocked from the Mac, which only matters if the agent runs there
+  (`back-to-mac`): add them with `nightblock config-add direct_hosts` (the command is in `NEXT_STEPS.md`).
+  `script.google.com` (exercise export) is open to Chrome only, not to scripts on the Mac.
 - macOS notifications for the Mac app need a stable code signature (`build.sh` signs with the Apple Development
   certificate from Xcode → Settings → Accounts); System Settings → Notifications → Atlas → Allow; add the app to
   Login Items.
@@ -589,8 +591,8 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
   (`UNErrorDomain error 1`): sign with a stable identity.
 - Mac app composer: a vertical `TextField` would not wrap at narrow widths and clipped the text; it is a
   `TextEditor` that grows to eight lines.
-- The exercise export (`script.google.com`) cannot be reached through nightblock overnight; the Toggl desktop
-  app (native Swift) may skip the proxy and needs its hosts allowed directly.
+- The exercise export (`script.google.com`) cannot be reached by a script on the Mac through nightblock
+  overnight. The Toggl desktop app's hosts are allowed directly in the firewall since 2026-11-19.
 - Otter ingestion marks a recording seen before the agent reads it, so a crash mid-turn cannot loop on it; the
   first run marks all existing recordings as seen (history is not news).
 - The shared `llm_contact.py` is imported from `~/Documents/agent-coding/shared` (`EA_SHARED_DIR` overrides); a
