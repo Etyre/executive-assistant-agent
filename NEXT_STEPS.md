@@ -4,6 +4,21 @@ Written 2026-11-04; updated 2026-11-05 late evening (stage 2 built, see below). 
 passed, and the web chat at http://localhost:8800 answers (server started by hand with `python -m ea serve`;
 it stops when this terminal session ends). Every other channel still needs credentials only Eli can supply. In the order that gets something usable soonest:
 
+## Food ordering on Grubhub (2026-11-19): built, waiting on Eli
+
+The agent can browse Grubhub from the server through a browser on the Mac (checked: `food_view` from the server
+shows the home page; an order is refused because no limit is set). Nothing has been ordered and the checkout page
+has not been seen, because the browser is not signed in. In order:
+
+1. **Eli signs in:** `.venv/bin/python bridge/food_signin.py`, sign in to Grubhub in the window, tick "keep me
+   signed in", check the default delivery address and card, close the window.
+2. **Eli gives the most one order may cost** (fees and tip included); it goes in `config.toml` `[food] max_total_usd`,
+   then `bridge/install_bridge.sh`. Optional: `FOOD_ADDRESS_CONTAINS=` in `data/.env` to hold orders to one address.
+3. **Claude Code checks the real checkout page** with the signed-in browser (the total is read, nothing pressed),
+   and fixes what does not fit. The first real order is placed only with Eli's go-ahead.
+4. **Eli tells Atlas** what the meal must be (requirements), what time, and the tip; Atlas keeps that in memory and
+   sets its own daily wakeup.
+
 ## Where things stand (2026-11-06 21:15)
 
 Running on this Mac under launchd, with the Mac app in /Applications as a login item. Live: Claude Agent SDK
