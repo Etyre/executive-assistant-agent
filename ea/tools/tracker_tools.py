@@ -28,6 +28,24 @@ SCHEDULE_ITEM = {
 }
 
 
+def _priority_out(v: Any) -> Any:
+    """The tracker stores `importance` 5 (highest) to 1; the user sees and types priority 1 (highest) to 5 (#p1..#p5).
+    The agent is shown the user's word and the user's numbers, so it never has to translate when talking to him."""
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            if k == "importance":
+                out["priority"] = 6 - x if isinstance(x, int) and not isinstance(x, bool) and 1 <= x <= 5 else x
+            elif k in ("importance_by", "importance_at"):
+                out["priority" + k[len("importance"):]] = x
+            else:
+                out[k] = _priority_out(x)
+        return out
+    if isinstance(v, list):
+        return [_priority_out(x) for x in v]
+    return v
+
+
 def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings | None = None) -> ProjectTracker:
     tracker = ProjectTracker(router, settings)
 
@@ -35,7 +53,10 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
         """The app is not running: say so and point at tracker_open instead of a bare connection error."""
         def run(*a, **k):
             try:
-                out = fn(*a, **k)
+                if k.get("priority") is not None:
+                    k["importance"] = 6 - max(1, min(5, int(k["priority"])))
+                k.pop("priority", None)
+                out = _priority_out(fn(*a, **k))
                 notes = tracker.take_notes()         # "this is the server's copy as of ...", or a queued change that failed
                 return {"note": " ".join(notes), "result": out} if notes else out
             except SourceError as e:
@@ -90,7 +111,7 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
               {"properties": {"title": {"type": "string"}, "project_id": {"type": "integer"},
                               "project_path": {"type": "array", "items": {"type": "string"}}, "create_project": {"type": "boolean"},
                               "parent_id": {"type": "integer"}, "description": {"type": "string"}, "deadline": {"type": "string"},
-                              "importance": {"type": "integer", "minimum": 1, "maximum": 5, "description": "1 = low, 5 = critical"},
+                              "priority": {"type": "integer", "minimum": 1, "maximum": 5, "description": "1 = highest (the user's #p1), 5 = lowest"},
                               "blocking": {"type": "boolean"}, "blocking_for": {"type": "string"},
                               "estimate_minutes": {"type": "integer"}, "note": {"type": "string"}},
                "required": ["title"]}, writes=True)
@@ -125,10 +146,10 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
     def tracker_delete_note(note_id: int) -> Any:
         return tracker.delete_note(note_id)
 
-    @reg.tool("tracker_update_task", "Change a task's title, description, deadline, importance, blocking flag or estimate.",
+    @reg.tool("tracker_update_task", "Change a task's title, description, deadline, priority, blocking flag or estimate.",
               {"properties": {"task_id": {"type": "integer"}, "title": {"type": "string"}, "description": {"type": "string"},
                               "deadline": {"type": "string"}, "clear_deadline": {"type": "boolean"},
-                              "importance": {"type": "integer", "minimum": 1, "maximum": 5}, "blocking": {"type": "boolean"},
+                              "priority": {"type": "integer", "minimum": 1, "maximum": 5, "description": "1 = highest (the user's #p1), 5 = lowest"}, "blocking": {"type": "boolean"},
                               "blocking_for": {"type": "string"}, "estimate_minutes": {"type": "integer"}},
                "required": ["task_id"]}, writes=True)
     @guard
@@ -139,13 +160,13 @@ def register(reg: ToolRegistry, router: ServiceRouter, settings: config.Settings
               "signed note on the task, and the planner uses it. `tags` is the tags as the user types them, in one string: "
               "#p1..#p5 #p0 #due:fri #today #tomorrow #nodue #soft:fri #nosoft #blocking #blocking:Name #notblocking "
               "#onesitting #focus #task #nokind #reading #notreading #writing #notwriting (an unknown tag is refused and "
-              "nothing is applied). The same things can be given as named fields, which win over a tag: importance, "
+              "nothing is applied). The same things can be given as named fields, which win over a tag: priority (1 = highest, as in #p1), "
               "deadline (hard; '2026-11-20', 'fri', '' clears), soft_deadline (ideally by), blocking, blocking_for, "
               "chunkable, work_kind ('task', 'focus', '' hands it back), reading, writing. estimate_minutes (0 hands it "
               "back to the forecast) and toggl_title (the timer's name; '' hands it back). Title and description are the "
               "user's text: tracker_update_task changes those.",
               {"properties": {"task_id": {"type": "integer"}, "tags": {"type": "string"}, "why": {"type": "string"},
-                              "importance": {"type": "integer", "minimum": 1, "maximum": 5},
+                              "priority": {"type": "integer", "minimum": 1, "maximum": 5, "description": "1 = highest (the user's #p1), 5 = lowest"},
                               "deadline": {"type": "string"}, "soft_deadline": {"type": "string"},
                               "blocking": {"type": "boolean"}, "blocking_for": {"type": "string"}, "chunkable": {"type": "boolean"},
                               "work_kind": {"type": "string", "enum": ["task", "focus", ""]},

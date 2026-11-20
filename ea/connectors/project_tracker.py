@@ -246,7 +246,7 @@ class ProjectTracker:
             if t.get("deadline"):
                 bits.append(f"due {t['deadline']}")
             if t.get("importance"):
-                bits.append(f"p{t['importance']}")
+                bits.append(f"p{6 - int(t['importance'])}")       # as the user sees it: #p1 is the highest, stored as 5
             if t.get("blocking"):
                 bits.append("BLOCKING" + (f" {t['blocking_for']}" if t.get("blocking_for") else ""))
             if t.get("estimate_minutes"):

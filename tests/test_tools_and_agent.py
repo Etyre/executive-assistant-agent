@@ -51,6 +51,8 @@ class FakeTracker:
             body = json.loads(request.content)
             return httpx.Response(200, json={"ok": True, "dropped": [], "plan": {"date": body.get("date") or "today", "items": body["items"],
                                                                                 "raw": {"pinned": body["pin"], "source": "agent:Atlas"}}})
+        if request.url.path == "/api/agent/tasks/7" and request.method == "PATCH":
+            return httpx.Response(200, json={"id": 7, "title": "Write memo", **json.loads(request.content), "importance_by": "agent"})
         if request.url.path == "/api/agent/tree":
             return httpx.Response(200, json={"projects": [{"id": 1, "path": ["Work"]}], "tree": [
                 {"id": 1, "name": "Work", "children": [], "notes_added": [], "tasks": [
@@ -139,8 +141,20 @@ def test_set_schedule_goes_to_tracker_as_pinned_put(agent):
     assert agent.fake_tracker.headers["x-agent-name"] == "Atlas"            # attributed to the agent by name
     # the outline tool rendered the tree as text with ids the model can quote, notes included
     outline_result = agent.provider.calls[1]["messages"][-2]["content"][0]["content"]
-    assert "* Work (project 1)" in outline_result and "[7] Write memo due 2026-11-06 p2" in outline_result
+    assert "* Work (project 1)" in outline_result and "[7] Write memo due 2026-11-06 p4" in outline_result       # stored 2 is the user's #p4
     assert "note [Atlas]: Sam wants it Friday" in outline_result
+
+
+def test_tracker_priority_is_the_users_word_and_numbering(agent):
+    """The tools say `priority`, 1 highest, as the tracker's page does; the tracker stores `importance`, 5 highest."""
+    agent.provider.script = [tool("tracker_set_task_meta", {"task_id": 7, "priority": 1, "why": "due first"}, "a"), text("Done.")]
+    agent.handle("make the memo top priority", channel="web")
+    sent = json.loads([r for r in agent.fake_tracker.received if r[0] == "PATCH"][0][2])
+    assert sent["importance"] == 5 and "priority" not in sent
+    shown = agent.provider.calls[1]["messages"][-2]["content"][0]["content"]
+    assert '"priority": 1' in shown and '"priority_by": "agent"' in shown and "importance" not in shown
+    spec = {t.name: t for t in agent.provider.calls[0]["tools"]}["tracker_set_task_meta"]
+    assert "priority" in spec.input_schema["properties"] and "importance" not in spec.description + json.dumps(spec.input_schema)
 
 
 def test_proactive_check_uses_send_message_or_not(agent):

@@ -470,6 +470,12 @@ The Project Tracker, Focus Monitor and Sleep Bandit must be running (they are, a
 
 ## Gotchas learned
 
+- **The tracker tools say "priority", 1 highest; the tracker stores `importance`, 5 highest** (2026-11-20, Eli: "it's
+  not an importance, it's a priority"). `ea/tools/tracker_tools.py` translates both ways (`priority = 6 - importance`)
+  in the wrapper around every tracker tool, so the agent sees the word and the numbers of the tracker's page (`#p1`
+  is the top). Before this the tools took `importance` with "1 = low", and the outline printed the stored number as
+  `pN`, so a `#p1` task read as "p5". Text the tracker itself writes (its change notes) still says "importance N".
+
 - **A screenshot can be sent as a path on the Mac** (2026-11-18): a message containing `/Users/.../x.png` (or
   `~/Desktop/...`; png, jpeg, gif, webp) has that file fetched and attached like an image from the app
   (`ImageStore.from_paths`, `GET /mac/image` on the bridge). Only Downloads and Desktop are served. A copied
